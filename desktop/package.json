@@ -1,0 +1,70 @@
+{
+  "name": "quiz-duel",
+  "version": "1.0.0",
+  "description": "Quiz Duel: locked quiz window",
+  "main": "app/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "author": "Quiz Duel",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0"
+  },
+  "productName": "Quiz Duel",
+  "build": {
+    "appId": "app.quizduel.desktop",
+    "productName": "Quiz Duel",
+    "files": [
+      "app/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "protocols": [
+      {
+        "name": "Quiz Duel link",
+        "schemes": [
+          "quizduel"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "QuizDuel-Setup.exe",
+      "shortcutName": "Quiz Duel"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.education",
+      "artifactName": "QuizDuel.dmg",
+      "identity": "-",
+      "extendInfo": {
+        "NSHumanReadableCopyright": "Quiz Duel"
+      }
+    }
+  }
+}

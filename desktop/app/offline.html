@@ -1,0 +1,9 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Quiz Duel</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#10143f;color:#eef2ff;font:17px/1.5 "Segoe UI",system-ui,sans-serif;text-align:center}
+.box{max-width:520px;padding:24px}h1{font-size:2rem;margin:0 0 .4em}button{font:inherit;font-weight:700;border-radius:3px 12px 3px 12px;padding:12px 22px;margin:6px;cursor:pointer;border:1px solid #5560c4}
+.go{background:#5ce1ff;color:#071038;border-color:#5ce1ff}.ghost{background:transparent;color:#eef2ff}</style></head>
+<body><div class="box"><h1>Can't reach Quiz Duel</h1><p>Check that this computer is connected to the internet, then try again.</p>
+<button class="go" id="retry">Try again</button><button class="ghost" id="quit">Close Quiz Duel</button></div>
+<script>const back=new URLSearchParams(location.search).get("back")||"";
+document.getElementById("retry").onclick=()=>window.quizDuelApp.retry(back);
+document.getElementById("quit").onclick=()=>window.quizDuelApp.quit();</script></body></html>

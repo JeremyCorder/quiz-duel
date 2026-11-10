@@ -1,0 +1,42 @@
+# Builds the Quiz Duel app for Windows and Mac and attaches the installers to a GitHub release.
+name: Build Quiz Duel app
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Point the app at your website
+        if: ${{ vars.QUIZDUEL_SITE_URL != '' }}
+        shell: bash
+        run: echo '{ "siteUrl": "${{ vars.QUIZDUEL_SITE_URL }}" }' > app/config.json
+      - run: npm ci
+      - run: npx electron-builder --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quiz-duel-${{ matrix.os }}
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.dmg
+      - if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/dist/*.exe
+            desktop/dist/*.dmg

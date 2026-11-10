@@ -23,7 +23,10 @@ jobs:
       - name: Point the app at your website
         if: ${{ vars.QUIZDUEL_SITE_URL != '' }}
         shell: bash
-        run: echo '{ "siteUrl": "${{ vars.QUIZDUEL_SITE_URL }}" }' > app/config.json
+        env:
+          SITE_URL: ${{ vars.QUIZDUEL_SITE_URL }}
+        run: |
+          echo "{ \"siteUrl\": \"$SITE_URL\" }" > app/config.json
       - run: npm ci
       - run: npx electron-builder --publish never
         env:

@@ -2,8 +2,9 @@
 # Run it: publish a GitHub release (the installers are attached to it), or press "Run workflow" on the Actions tab.
 name: Build Quiz Duel app
 on:
-  push:
-    tags: ["app-v*"]        # pushing a tag like app-v1.0.3 builds the app and makes the release
+  push:                     # any change to the app's code builds it and publishes a new release automatically
+    branches: [main]
+    paths: ["desktop/**", ".github/workflows/desktop.yml"]
   release:
     types: [published]
   workflow_dispatch:
@@ -40,9 +41,19 @@ jobs:
           path: |
             desktop/dist/*.exe
             desktop/dist/*.dmg
-      - if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/app-v')
+      - if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
+          files: |
+            desktop/dist/*.exe
+            desktop/dist/*.dmg
+      - if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: app-build-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: Quiz Duel app (build ${{ github.run_number }})
+          make_latest: true
           files: |
             desktop/dist/*.exe
             desktop/dist/*.dmg

@@ -1,6 +1,6 @@
 "use strict";
 // Quiz Duel: a locked-down window that only shows the Quiz Duel website.
-const { app, BrowserWindow, ipcMain, session, screen, clipboard, Menu, dialog, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, session, screen, clipboard, Menu, dialog, shell, globalShortcut } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const apps = require("./apps");
@@ -80,6 +80,7 @@ function createWindow(startUrl) {
   // keyboard shortcuts that would reload, print, open tools or close the window
   wc.on("before-input-event", (e, input) => {
     const k = (input.key || "").toLowerCase(), mod = input.control || input.meta;
+    if (input.type === "keyDown") emergencyKey(k);
     if (k === "f5" || k === "f12" || k === "f11" || k === "f1" ||
         (mod && !input.shift && ["r", "w", "n", "t", "p", "s", "o", "q", "h", "m", "j", "l", "d", "f", "g"].includes(k)) || (mod && input.shift && ["n", "t", "w", "q"].includes(k)) ||
         (mod && input.shift && ["i", "c", "j", "delete"].includes(k)) || (input.alt && k === "f4") || (input.alt && (k === "arrowleft" || k === "arrowright"))) e.preventDefault();
@@ -104,11 +105,24 @@ function createWindow(startUrl) {
   win.focus();
   win.loadFile(path.join(__dirname, "loading.html")).catch(() => {}).then(() => loadSite(startUrl));
 }
-// open the quiz website; if it hasn't arrived after 30 seconds, show the "can't reach" page
+// ---------------------------------------------------------------- always a way out (when no locked quiz is running)
+// Up, Up, Down, Up  or  Down, Down, Up, Down  (within 4 seconds), or Ctrl+Shift+Alt+Q, close Quiz Duel from ANY screen -
+// the starting screen, an error page, or a page that froze. During a locked quiz the page handles it (teacher's code).
+let keyTrail = [];
+function emergencyKey(k) {
+  if (k !== "arrowup" && k !== "arrowdown") { keyTrail = []; return; }
+  const now = Date.now();
+  keyTrail = keyTrail.filter((x) => now - x.t < 4000).concat({ k, t: now }).slice(-4);
+  const seq = keyTrail.map((x) => x.k).join(",");
+  if (!locked && (seq === "arrowup,arrowup,arrowdown,arrowup" || seq === "arrowdown,arrowdown,arrowup,arrowdown")) quitNow();
+}
+function quitNow() { quitting = true; try { setLocked(false); } catch (e) {} winlock.shutdown(); app.quit(); setTimeout(() => app.exit(0), 3000); }
+
+// open the quiz website; if it hasn't arrived after 15 seconds, show the "can't reach" page
 let loadTimer = null;
 function loadSite(url) {
   clearTimeout(loadTimer);
-  loadTimer = setTimeout(() => { if (win && !win.isDestroyed() && win.webContents.isLoadingMainFrame()) win.loadFile(path.join(__dirname, "offline.html"), { query: { back: url } }); }, 30000);
+  loadTimer = setTimeout(() => { if (win && !win.isDestroyed() && win.webContents.isLoadingMainFrame()) win.loadFile(path.join(__dirname, "offline.html"), { query: { back: url } }); }, 15000);
   win.webContents.once("did-finish-load", () => clearTimeout(loadTimer));
   win.loadURL(url).catch(() => {});
 }
@@ -180,6 +194,9 @@ else {
   process.on("exit", () => winlock.shutdown());
 
   app.whenReady().then(async () => {
+    // works even if the Quiz Duel window isn't responding to the keyboard
+    try { globalShortcut.register("CommandOrControl+Shift+Alt+Q", () => { if (!locked) quitNow(); }); } catch (e) {}
+    app.on("will-quit", () => { try { globalShortcut.unregisterAll(); } catch (e) {} });
     await winlock.init(app.getPath("userData")).catch(() => {});
     Menu.setApplicationMenu(process.platform === "darwin" ? Menu.buildFromTemplate([{ label: "Quiz Duel", submenu: [] },
       { label: "Edit", submenu: [{ role: "undo" }, { role: "redo" }, { role: "selectAll" }] }]) : null);

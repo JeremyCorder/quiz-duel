@@ -663,7 +663,8 @@
             h("button", { class: "linkish", onclick: () => focusSetup() }, "Start a focus session (study timer)")),
         IN_APP ? null : h("section", { class: "card home-app" }, h("h2", {}, "Get the Quiz Duel app"),
           h("p", { class: "muted" }, "Some quizzes need the app, which locks the computer during the test. Free for Windows and Mac."),
-          appDownloads(true))));
+          appDownloads(true)),
+        h("p", { class: "version muted small" }, "Version " + (window.QD_VERSION || "local"))));
   }
 
   // ================================================================ student: join

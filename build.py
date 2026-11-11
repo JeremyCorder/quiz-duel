@@ -13,7 +13,10 @@ import os, json
 repo = os.environ.get("QD_DOWNLOAD_BASE") or (os.environ.get("REPOSITORY_URL", "").rstrip("/") + "/releases/latest/download" if os.environ.get("REPOSITORY_URL", "").startswith("https://github.com/") else "https://github.com/JeremyCorder/quiz-duel/releases/latest/download")
 downloads = {"win": repo + "/QuizDuel-Setup.exe" if repo else "", "mac": repo + "/QuizDuel.dmg" if repo else ""}
 html = read("template.html")
-html = html.replace("/*EXAMBLOB*/", "window.QD_DOWNLOADS = " + json.dumps(downloads) + ";\n" + safe(read("exam_blob.js")), 1)
+# which version is live: Netlify gives the GitHub commit it built from
+import datetime
+version = (os.environ.get("COMMIT_REF", "")[:7] or "local") + " \u00b7 " + datetime.date.today().strftime("%b %d, %Y")
+html = html.replace("/*EXAMBLOB*/", "window.QD_VERSION = " + json.dumps(version) + ";\nwindow.QD_DOWNLOADS = " + json.dumps(downloads) + ";\n" + safe(read("exam_blob.js")), 1)
 html = html.replace("/*CORE*/", safe(read("core.js") + "\n" + read("builtin.js") + "\n" + read("music.js")), 1)
 html = html.replace("/*APP*/", safe(read("app.js")), 1)
 (out / "index.html").write_text(html, encoding="utf8")

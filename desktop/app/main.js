@@ -91,7 +91,10 @@ function createWindow(startUrl) {
   });
   wc.on("render-process-gone", () => { if (!quitting) wc.reload(); });
 
-  win.on("close", (e) => { if (!quitting) e.preventDefault(); });   // Alt+F4 and the like
+  // Alt+F4 is blocked by the keyboard rules above. Requests to close from Windows itself (an installer updating the app,
+  // shutting down, Task Manager) are only refused during a locked quiz; otherwise the app closes normally.
+  win.on("close", (e) => { if (!quitting && locked) e.preventDefault(); else { quitting = true; winlock.shutdown(); } });
+  win.on("session-end", () => { quitting = true; winlock.shutdown(); });   // Windows is shutting down or signing out
   win.on("blur", () => {
     if (quitting) return;
     if (locked) send("left");                                       // during a quiz the page reports it to the teacher

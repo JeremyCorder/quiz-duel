@@ -29,6 +29,8 @@
   const SECURITY = { low: "Low", medium: "Medium", high: "High" };
   const secLevel = (st) => (st && SECURITY[st.security]) ? st.security : (st && st.lockdown ? "medium" : "low");
   const locked = (st) => secLevel(st) !== "low";
+  // the Quiz Duel app is required for High security, and for any quiz with anti-game on (a website can't block games)
+  const needsApp = (st) => secLevel(st) === "high" || !!(st && st.closeGames);
   const EMAIL_RE = /^[^\s@<>"]+@[^\s@<>"]+\.[A-Za-z]{2,}$/;
 
   // ------------------------------------------------------------ small helpers
@@ -154,9 +156,9 @@
 
   // ---- formatted writing (long answers). Only harmless formatting survives: everything a student
   // sends is rebuilt from an allow-list before the teacher's page shows it.
-  const RICH_TAGS = new Set(["P", "DIV", "BR", "H1", "H2", "B", "STRONG", "I", "EM", "U", "SPAN", "FONT", "UL", "OL", "LI"]);
-  const RICH_STYLES = ["color", "background-color", "font-family", "font-size", "font-weight", "font-style", "text-decoration-line", "text-decoration"];
-  const RICH_BLOCKS = new Set(["P", "DIV", "H1", "H2", "LI", "BR"]);
+  const RICH_TAGS = new Set(["P", "DIV", "BR", "H1", "H2", "H3", "B", "STRONG", "I", "EM", "U", "S", "STRIKE", "SUP", "SUB", "SPAN", "FONT", "UL", "OL", "LI", "BLOCKQUOTE", "HR"]);
+  const RICH_STYLES = ["color", "background-color", "font-family", "font-size", "font-weight", "font-style", "text-decoration-line", "text-decoration", "text-align", "line-height", "margin-left", "list-style-type", "vertical-align", "letter-spacing"];
+  const RICH_BLOCKS = new Set(["P", "DIV", "H1", "H2", "H3", "LI", "BR", "BLOCKQUOTE", "HR"]);
   const safeCss = (v) => /^[\w\s#(),.%"'-]{1,120}$/.test(v) && !/url|expression|javascript/i.test(v);
   function richClean(html) {
     const doc = new DOMParser().parseFromString("<body>" + String(html || "").slice(0, 60000), "text/html");
@@ -168,13 +170,16 @@
         const tag = n.tagName;
         if (tag === "SCRIPT" || tag === "STYLE" || tag === "IFRAME" || tag === "OBJECT") continue;
         if (!RICH_TAGS.has(tag)) { walk(n, dst, depth + 1); continue; }
-        const el = document.createElement(tag === "FONT" ? "span" : tag);
+        const el = document.createElement(tag === "FONT" ? "span" : tag === "STRIKE" ? "s" : tag);
         for (const name of RICH_STYLES) { const v = n.style.getPropertyValue(name); if (v && safeCss(v)) el.style.setProperty(name, v); }
         if (tag === "FONT") {
-          const c = n.getAttribute("color"), f = n.getAttribute("face");
+          const c = n.getAttribute("color"), f = n.getAttribute("face"), z = n.getAttribute("size");
           if (c && safeCss(c)) el.style.color = c;
           if (f && safeCss(f)) el.style.fontFamily = f;
+          if (/^[1-7]$/.test(z || "")) el.style.fontSize = FONT_STEPS[+z - 1][1];
         }
+        const al = n.getAttribute("align");
+        if (/^(left|right|center|justify)$/i.test(al || "")) el.style.textAlign = al.toLowerCase();
         dst.append(el);
         walk(n, el, depth + 1);
       }
@@ -189,49 +194,205 @@
         else if (n.nodeType === 1) { if (n.tagName === "BR") text += "\n"; walk(n); if (RICH_BLOCKS.has(n.tagName) && n.tagName !== "BR") text += "\n"; }
       }
     })(richClean(html));
-    return text.replace(/\u00a0/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+    return text.replace(/ /g, " ").replace(/\n{3,}/g, "\n\n").trim();
   }
   const shownRaw = (p, raw) => p.kind === "long" ? richText(raw) : M.shownAnswer(p, raw);
   const answerView = (p, raw, cls) => p.kind === "long" ? h("div", { class: cls + " paper" }, richClean(raw)) : h("pre", { class: cls }, M.shownAnswer(p, raw));
 
-  const WRITE_FONTS = [["Standard", '"Lexend", "Segoe UI", Arial, sans-serif'], ["Serif (book)", 'Georgia, "Times New Roman", serif'],
-    ["Typewriter", '"Courier New", Courier, monospace'], ["Dyslexia-friendly", '"OpenDyslexic", "Comic Sans MS", Verdana, sans-serif']];
-  const TEXT_COLORS = [["Black", "#16193a"], ["Red", "#d4213d"], ["Blue", "#1b4fd8"], ["Green", "#14804a"], ["Purple", "#7a2bd6"], ["Orange", "#c25a00"]];
-  const MARK_COLORS = [["Yellow", "#fff176"], ["Green", "#b9f6ca"], ["Blue", "#b3e5fc"], ["Pink", "#f8bbd0"]];
-  // A small word processor: styles (title / chapter), font, size, bold / italic / underline, colour, highlight.
+  const WRITE_FONTS = [["Lexend", '"Lexend", "Segoe UI", Arial, sans-serif'], ["Arial", "Arial, Helvetica, sans-serif"], ["Verdana", "Verdana, Geneva, sans-serif"],
+    ["Trebuchet", '"Trebuchet MS", sans-serif'], ["Georgia", 'Georgia, "Times New Roman", serif'], ["Times New Roman", '"Times New Roman", Times, serif'],
+    ["Courier New", '"Courier New", Courier, monospace'], ["Comic Sans", '"Comic Sans MS", "Comic Sans", cursive'], ["OpenDyslexic", '"OpenDyslexic", "Comic Sans MS", Verdana, sans-serif']];
+  // the browser's 7 text sizes, shown as point sizes like a word processor
+  const FONT_STEPS = [["8", "x-small"], ["10", "small"], ["12", "medium"], ["14", "large"], ["18", "x-large"], ["24", "xx-large"], ["36", "xxx-large"]];
+  const TEXT_COLORS = [["Black", "#16193a"], ["Dark grey", "#5b6170"], ["Red", "#d4213d"], ["Orange", "#c25a00"], ["Green", "#14804a"], ["Blue", "#1b4fd8"], ["Purple", "#7a2bd6"], ["Pink", "#c2185b"]];
+  const MARK_COLORS = [["Yellow", "#fff176"], ["Green", "#b9f6ca"], ["Blue", "#b3e5fc"], ["Pink", "#f8bbd0"], ["Orange", "#ffe0b2"], ["Purple", "#e1bee7"]];
+  const SYMBOLS = ["°", "±", "×", "÷", "≠", "≈", "≤", "≥", "√", "∞", "π", "θ", "Δ", "Σ", "µ", "Ω", "²", "³", "½", "¼", "¾", "→", "←", "↑", "↓", "↔", "•", "—", "…", "©",
+    "é", "è", "ê", "á", "à", "ñ", "ü", "ö", "ç", "¿", "¡", "€", "£", "¥"];
+  const LINE_SPACING = [["Single", "1.2"], ["1.15", "1.4"], ["1.5", "1.8"], ["Double", "2.4"]];
+  const LETTER_SPACING = [["Tight", "-0.03em"], ["Normal", "normal"], ["Wide", "0.08em"], ["Wider", "0.15em"], ["Widest", "0.25em"]];
+  // little drawings for the toolbar buttons (Google Docs style)
+  const ICONS = {
+    letters: "M3 4l3 9 3-9M4.2 9.5h3.6M13 4l3 9 3-9M14.2 9.5h3.6M3 19h18M3 19l2-2M3 19l2 2M21 19l-2-2M21 19l-2 2",
+    undo: "M9 7H4V2M4.5 7A8 8 0 1 1 6 17", redo: "M15 7h5V2M19.5 7A8 8 0 1 0 18 17",
+    left: "M3 5h18M3 9h12M3 13h18M3 17h12", center: "M3 5h18M6 9h12M3 13h18M6 17h12", right: "M3 5h18M9 9h12M3 13h18M9 17h12", justify: "M3 5h18M3 9h18M3 13h18M3 17h18",
+    bullets: "M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01", numbers: "M10 6h11M10 12h11M10 18h11M4 4v4M3 18h3l-3 3h3M3 12h2.5l-2.5 2h3",
+    indent: "M3 5h18M11 10h10M11 14h10M3 19h18M3 9l4 3-4 3", outdent: "M3 5h18M11 10h10M11 14h10M3 19h18M7 9l-4 3 4 3",
+    clear: "M6 4h12M12 4l-4 16M4 20l16-16", spacing: "M11 6h10M11 12h10M11 18h10M5 4v16M3 6l2-2 2 2M3 18l2 2 2-2", line: "M3 12h18",
+  };
+  const icon = (k) => { const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("aria-hidden", "true"); svg.setAttribute("class", "ticon");
+    const p = document.createElementNS("http://www.w3.org/2000/svg", "path"); p.setAttribute("d", ICONS[k]); svg.append(p); return svg; };
+  // A small word processor, laid out like Google Docs: undo/redo, style, font, size, bold/italic/underline/strike,
+  // colour, highlight, super/subscript, alignment, line spacing, lists, indent, symbols, line, clear formatting.
   function writer(spell) {
     const page = h("div", { id: "answer", class: "paper long-answer", contenteditable: "true", role: "textbox", "aria-multiline": "true", "aria-label": "Your answer", spellcheck: spell ? "true" : "false", lang: "en" });
     const count = h("span", {}, "0 words");
     let saved = null;
     const keep = () => { const sel = window.getSelection(); if (sel.rangeCount && page.contains(sel.anchorNode)) saved = sel.getRangeAt(0).cloneRange(); };
+    // put the cursor back where it was, but only if a menu or box took it away (re-setting it can move it in lists)
+    const restore = () => {
+      const sel = window.getSelection();
+      const inside = sel.rangeCount && page.contains(sel.anchorNode);
+      if (document.activeElement !== page) page.focus({ preventScroll: true });
+      if (!inside && saved) { sel.removeAllRanges(); sel.addRange(saved); }
+    };
+    // the cursor / selection as character positions in the text, so it can be put back after Chrome moves it
+    const offsets = () => {
+      const sel = window.getSelection(); if (!sel.rangeCount || !page.contains(sel.anchorNode)) return null;
+      const r = sel.getRangeAt(0), pre = document.createRange();
+      pre.selectNodeContents(page); pre.setEnd(r.startContainer, r.startOffset);
+      const start = pre.toString().length;
+      return [start, start + r.toString().length];
+    };
+    const setOffsets = ([a, b]) => {
+      const walker = document.createTreeWalker(page, NodeFilter.SHOW_TEXT);
+      let n, pos = 0, sN = null, sO = 0, eN = null, eO = 0, last = null;
+      while ((n = walker.nextNode())) {
+        const len = n.nodeValue.length; last = n;
+        if (!sN && a <= pos + len) { sN = n; sO = a - pos; }
+        if (!eN && b <= pos + len) { eN = n; eO = b - pos; break; }
+        pos += len;
+      }
+      if (!sN) return;
+      if (!eN) { eN = last; eO = last.nodeValue.length; }
+      const r = document.createRange(); r.setStart(sN, sO); r.setEnd(eN, eO);
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    };
+    const KEEP_CURSOR = new Set(["insertOrderedList", "insertUnorderedList", "indent", "outdent", "justifyLeft", "justifyCenter", "justifyRight", "justifyFull", "formatBlock"]);
     const run = (cmd, val) => {
-      page.focus();
-      if (saved) { const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(saved); }
+      restore();
+      const at = KEEP_CURSOR.has(cmd) ? offsets() : null;
       try { document.execCommand("styleWithCSS", false, true); document.execCommand(cmd, false, val); } catch (e) { /* not supported */ }
+      if (at) { const now = offsets(); if (!now || now[0] !== at[0] || now[1] !== at[1]) setOffsets(at); }
+      tidy(); keep(); update(); paintState();
+    };
+    // Chrome sometimes copies the page's own text size/font into spans when moving text; those would stop
+    // Title/Heading from making text bigger, so remove them (the toolbar's own sizes never use "rem")
+    function tidy() {
+      const at = offsets();
+      let changed = false;
+      page.querySelectorAll("span[style]").forEach((el) => {
+        if (/rem$/.test(el.style.fontSize)) { el.style.fontSize = ""; changed = true; }
+        if (/Lexend/.test(el.style.fontFamily) && !el.closest("[style*='font-family']:not(span)")) { /* keep: chosen on purpose */ }
+        if (!el.getAttribute("style") || !el.style.cssText.trim()) { el.replaceWith(...el.childNodes); changed = true; }
+      });
+      if (changed && at) setOffsets(at);
+    }
+    // the paragraphs the selection touches (wrapping loose text in a paragraph first)
+    const blocksInSelection = () => {
+      restore();
+      const sel = window.getSelection(); if (!sel.rangeCount) return [];
+      const r = sel.getRangeAt(0);
+      const blockOf = (n) => { while (n && n !== page) { if (n.nodeType === 1 && /^(P|DIV|H1|H2|H3|LI|BLOCKQUOTE)$/.test(n.tagName)) return n; n = n.parentNode; } return null; };
+      if (!blockOf(r.startContainer)) { try { document.execCommand("formatBlock", false, "P"); } catch (e) {} }
+      const r2 = sel.rangeCount ? sel.getRangeAt(0) : r;
+      return [...page.querySelectorAll("p,div,h1,h2,h3,li,blockquote")].filter((b) => r2.intersectsNode(b) && !b.querySelector("p,div,h1,h2,h3,li"));
+    };
+    // letter spacing for the selected text (marks it with a made-up font name, then swaps that for the spacing)
+    const letters = (v) => {
+      restore();
+      const sel = window.getSelection();
+      if (!sel.rangeCount || sel.isCollapsed) { blocksInSelection().forEach((b) => { b.style.letterSpacing = v === "normal" ? "" : v; }); keep(); return; }
+      let font = ""; try { font = document.queryCommandValue("fontName"); } catch (e) {}
+      const pageFont = getComputedStyle(page).fontFamily;
+      try { document.execCommand("styleWithCSS", false, true); document.execCommand("fontName", false, "qd-letters"); } catch (e) { return; }
+      page.querySelectorAll("span, font").forEach((el) => {
+        if ((el.style.fontFamily || el.getAttribute("face") || "").replace(/["']/g, "") !== "qd-letters") return;
+        el.style.fontFamily = font && font.replace(/["']/g, "") !== pageFont.replace(/["']/g, "") ? font : ""; el.removeAttribute("face");
+        el.querySelectorAll("*").forEach((k) => { k.style.letterSpacing = ""; });
+        el.style.letterSpacing = v === "normal" ? "" : v;
+        if (!el.getAttribute("style")) el.replaceWith(...el.childNodes);
+      });
       keep(); update();
     };
-    const update = () => {
-      if (!page.textContent.trim() && !page.querySelector("li")) { /* keep the placeholder visible */ if (page.innerHTML === "<br>") page.innerHTML = ""; }
-      const n = (page.innerText.trim().match(/\S+/g) || []).length;
-      count.textContent = n + (n === 1 ? " word" : " words");
+    const spacing = (v) => { blocksInSelection().forEach((b) => { b.style.lineHeight = v; }); keep(); update(); };
+    // changing the style (Title, Heading...) keeps the paragraph's alignment and spacing
+    const setStyle = (tag) => {
+      const before = blocksInSelection().map((b) => [b.style.textAlign, b.style.lineHeight]);
+      run("formatBlock", tag);
+      const after = blocksInSelection();
+      after.forEach((b, i) => { const [al, lh] = before[Math.min(i, before.length - 1)] || []; if (al) b.style.textAlign = al; if (lh) b.style.lineHeight = lh; });
+      keep();
     };
-    for (const ev of ["keyup", "mouseup", "blur", "input"]) page.addEventListener(ev, () => { keep(); if (ev === "input") update(); });
-    page.addEventListener("keydown", (e) => { if (e.key === "Tab") { e.preventDefault(); run("insertText", "    "); } });
-    const tool = (label, title, cmd, val, style) => h("button", { class: "tool", type: "button", title, "aria-label": title, style: style || "", onmousedown: (e) => e.preventDefault(), onclick: () => run(cmd, val) }, label);
-    const pick = (title, opts, fn) => { const sel = h("select", { title, "aria-label": title, onchange: () => { fn(sel.value); } }, opts.map(([t, v]) => h("option", { value: v }, t))); return sel; };
-    const swatch = (name, color, cmd, what) => h("button", { class: "swatch" + (color === "transparent" ? " none" : ""), type: "button", title: `${what}: ${name}`, "aria-label": `${what}: ${name}`,
-      style: color === "transparent" ? "" : "background:" + color, onmousedown: (e) => e.preventDefault(), onclick: () => run(cmd, color) });
+    const update = () => {
+      if (!page.textContent.trim() && !page.querySelector("li,hr")) { if (page.innerHTML === "<br>") page.innerHTML = ""; }
+      const n = (page.innerText.trim().match(/\S+/g) || []).length;
+      count.textContent = n + (n === 1 ? " word" : " words") + " · " + page.innerText.replace(/\s/g, "").length + " characters";
+    };
+    // show which buttons are "on" where the cursor is, like Google Docs
+    const onBtns = {};
+    let sizeSel = null;
+    const paintState = () => {
+      if (document.activeElement !== page) return;
+      for (const [cmd, b] of Object.entries(onBtns)) { let on = false; try { on = document.queryCommandState(cmd); } catch (e) {} b.classList.toggle("on", on); b.setAttribute("aria-pressed", on ? "true" : "false"); }
+      try { const v = +document.queryCommandValue("fontSize"); if (v >= 1 && v <= 7 && sizeSel) sizeSel.value = String(v); } catch (e) {}
+    };
+    for (const ev of ["keyup", "mouseup", "blur", "input", "focus"]) page.addEventListener(ev, () => { keep(); if (ev === "input") update(); if (ev !== "blur") paintState(); });
+    page.addEventListener("keydown", (e) => {
+      if (e.key === "Tab") { e.preventDefault(); run(e.shiftKey ? "outdent" : (page.contains(window.getSelection().anchorNode) && window.getSelection().anchorNode.parentElement.closest("li") ? "indent" : "insertText"), "    "); }
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.shiftKey && (e.key === "e" || e.key === "E")) { e.preventDefault(); run("justifyCenter"); }
+      else if (mod && e.shiftKey && (e.key === "l" || e.key === "L")) { e.preventDefault(); run("justifyLeft"); }
+      else if (mod && e.shiftKey && (e.key === "r" || e.key === "R")) { e.preventDefault(); run("justifyRight"); }
+      else if (mod && e.shiftKey && (e.key === "j" || e.key === "J")) { e.preventDefault(); run("justifyFull"); }
+      else if (mod && e.shiftKey && e.key === "7") { e.preventDefault(); run("insertOrderedList"); }
+      else if (mod && e.shiftKey && e.key === "8") { e.preventDefault(); run("insertUnorderedList"); }
+      else if (mod && e.key === ".") { e.preventDefault(); run("superscript"); }
+      else if (mod && e.key === ",") { e.preventDefault(); run("subscript"); }
+    });
+    const noSteal = (e) => e.preventDefault();
+    const tool = (label, title, cmd, val, opts) => {
+      const b = h("button", { class: "tool" + (opts && opts.cls ? " " + opts.cls : ""), type: "button", title, "aria-label": title, style: (opts && opts.style) || "", onmousedown: noSteal,
+        onclick: () => (typeof cmd === "function" ? cmd() : run(cmd, val)) }, typeof label === "string" && ICONS[label] ? icon(label) : label);
+      if (opts && opts.state) onBtns[opts.state] = b;
+      return b;
+    };
+    const pick = (title, opts, fn, cls) => { const sel = h("select", { title, "aria-label": title, class: cls || "", onchange: () => { if (sel.value !== "") fn(sel.value); } }, opts.map(([t, v]) => h("option", { value: v }, t))); return sel; };
+    // colour menu: preset swatches + any colour
+    const colourMenu = (title, labelEl, cmd, colors, allowNone) => {
+      const panel = h("div", { class: "tpanel", hidden: true, role: "menu" });
+      const close = () => { panel.hidden = true; };
+      const choose = (c) => { close(); run(cmd, c); if (c !== "transparent") bar.style.background = c; };
+      const custom = h("input", { type: "color", "aria-label": title + ": any colour", value: colors[0][1], onchange: (e) => choose(e.target.value) });
+      panel.append(h("div", { class: "swatches" }, colors.map(([n, c]) => h("button", { class: "swatch", type: "button", title: `${title}: ${n}`, "aria-label": `${title}: ${n}`, style: "background:" + c, onmousedown: noSteal, onclick: () => choose(c) })),
+        allowNone ? h("button", { class: "swatch none", type: "button", title: `${title}: none`, "aria-label": `${title}: none`, onmousedown: noSteal, onclick: () => choose("transparent") }) : null),
+        h("label", { class: "custom-colour" }, "Any colour ", custom));
+      const bar = h("span", { class: "cbar", style: "background:" + colors[0][1] });
+      const btn = h("button", { class: "tool", type: "button", title, "aria-label": title, "aria-haspopup": "true", onmousedown: noSteal, onclick: () => { keep(); const open = panel.hidden; closeMenus(); panel.hidden = !open; } }, h("span", { class: "tcol" }, labelEl, bar));
+      menus.push(panel);
+      return h("span", { class: "tmenu" }, btn, panel);
+    };
+    const menus = [];
+    const closeMenus = () => menus.forEach((m) => { m.hidden = true; });
+    document.addEventListener("mousedown", (e) => { if (!e.target.closest || !e.target.closest(".tmenu")) closeMenus(); });
+    // symbols menu
+    const symPanel = h("div", { class: "tpanel symbols", hidden: true, role: "menu" }, SYMBOLS.map((c) => h("button", { class: "sym", type: "button", title: "Insert " + c, onmousedown: noSteal, onclick: () => { symPanel.hidden = true; run("insertText", c); } }, c)));
+    menus.push(symPanel);
+    const symMenu = h("span", { class: "tmenu" }, h("button", { class: "tool", type: "button", title: "Insert a symbol", "aria-label": "Insert a symbol", onmousedown: noSteal, onclick: () => { keep(); const open = symPanel.hidden; closeMenus(); symPanel.hidden = !open; } }, "Ω"), symPanel);
+    // size: number box with - and + like Google Docs
+    sizeSel = pick("Font size", FONT_STEPS.map(([pt], i) => [pt, String(i + 1)]), (v) => run("fontSize", v), "size");
+    sizeSel.value = "3";
+    const stepSize = (d) => { const v = Math.max(1, Math.min(7, (+sizeSel.value || 3) + d)); sizeSel.value = String(v); run("fontSize", String(v)); };
+    const sep = () => h("span", { class: "tsep", "aria-hidden": "true" });
     const tools = h("div", { class: "tools", role: "toolbar", "aria-label": "Text formatting" },
-      h("div", { class: "tool-group" }, pick("Style", [["Normal text", "P"], ["Title", "H1"], ["Chapter", "H2"]], (v) => run("formatBlock", v)),
-        pick("Font", WRITE_FONTS, (v) => run("fontName", v)),
-        pick("Size", [["Normal size", "3"], ["Small", "2"], ["Large", "5"], ["Extra large", "6"]], (v) => run("fontSize", v))),
-      h("div", { class: "tool-group" }, tool("B", "Bold", "bold", null, "font-weight:800"), tool("I", "Italic", "italic", null, "font-style:italic"), tool("U", "Underline", "underline", null, "text-decoration:underline"),
-        tool("\u2022 List", "Bullet list", "insertUnorderedList"), tool("Clear", "Remove formatting", "removeFormat")),
-      h("div", { class: "tool-group" }, h("span", {}, "Text colour"), TEXT_COLORS.map(([n, c]) => swatch(n, c, "foreColor", "Text colour"))),
-      h("div", { class: "tool-group" }, h("span", {}, "Highlight"), MARK_COLORS.map(([n, c]) => swatch(n, c, "hiliteColor", "Highlight")), swatch("none", "transparent", "hiliteColor", "Highlight")));
+      tool("undo", "Undo (Ctrl+Z)", "undo"), tool("redo", "Redo (Ctrl+Y)", "redo"), sep(),
+      pick("Style", [["Normal text", "P"], ["Title", "H1"], ["Heading", "H2"], ["Subheading", "H3"], ["Quote", "BLOCKQUOTE"]], (v) => setStyle(v)), sep(),
+      pick("Font", WRITE_FONTS, (v) => run("fontName", v), "font"), sep(),
+      tool("−", "Smaller text", () => stepSize(-1)), sizeSel, tool("+", "Bigger text", () => stepSize(1)), sep(),
+      tool("B", "Bold (Ctrl+B)", "bold", null, { style: "font-weight:800", state: "bold" }), tool("I", "Italic (Ctrl+I)", "italic", null, { style: "font-style:italic", state: "italic" }),
+      tool("U", "Underline (Ctrl+U)", "underline", null, { style: "text-decoration:underline", state: "underline" }), tool("S", "Strikethrough", "strikeThrough", null, { style: "text-decoration:line-through", state: "strikeThrough" }),
+      colourMenu("Text colour", h("b", { class: "tA" }, "A"), "foreColor", TEXT_COLORS, false), colourMenu("Highlight", h("span", { class: "tH" }, "✎"), "hiliteColor", MARK_COLORS, true),
+      tool(h("span", {}, "x", h("sup", {}, "2")), "Superscript (Ctrl+.)", "superscript", null, { state: "superscript" }), tool(h("span", {}, "x", h("sub", {}, "2")), "Subscript (Ctrl+,)", "subscript", null, { state: "subscript" }), sep(),
+      tool("left", "Align left (Ctrl+Shift+L)", "justifyLeft", null, { state: "justifyLeft" }), tool("center", "Center (Ctrl+Shift+E)", "justifyCenter", null, { state: "justifyCenter" }),
+      tool("right", "Align right (Ctrl+Shift+R)", "justifyRight", null, { state: "justifyRight" }), tool("justify", "Justify (Ctrl+Shift+J)", "justifyFull", null, { state: "justifyFull" }),
+      h("label", { class: "tspacing", title: "Line spacing" }, icon("spacing"), pick("Line spacing", [["Line spacing", ""], ...LINE_SPACING], (v) => spacing(v))),
+      h("label", { class: "tspacing", title: "Letter spacing" }, icon("letters"), pick("Letter spacing", [["Letter spacing", ""], ...LETTER_SPACING], (v) => letters(v))), sep(),
+      tool("bullets", "Bullet list (Ctrl+Shift+8)", "insertUnorderedList", null, { state: "insertUnorderedList" }), tool("numbers", "Numbered list (Ctrl+Shift+7)", "insertOrderedList", null, { state: "insertOrderedList" }),
+      tool("outdent", "Decrease indent (Shift+Tab)", "outdent"), tool("indent", "Increase indent", "indent"), sep(),
+      symMenu, tool("line", "Insert a line", "insertHorizontalRule"), tool("clear", "Clear formatting", "removeFormat"));
+    tools.querySelectorAll(".tspacing select").forEach((s2) => { s2.addEventListener("change", () => { s2.value = ""; }); });
     const box = h("div", { class: "writer" }, tools, page, h("div", { class: "writer-foot" }, count));
     return { box, page, isEmpty: () => !page.innerText.trim(), html: () => { const d = document.createElement("div"); d.append(richClean(page.innerHTML)); return d.innerHTML.slice(0, 40000); },
-      lock: () => { page.contentEditable = "false"; tools.querySelectorAll("button,select").forEach((el) => { el.disabled = true; }); } };
+      lock: () => { page.contentEditable = "false"; tools.querySelectorAll("button,select,input").forEach((el) => { el.disabled = true; }); closeMenus(); } };
   }
   function card(...kids) { return h("section", { class: "card" }, ...kids); }
 
@@ -455,7 +616,22 @@
   function saveSets() { store.set("md-quizzes", S.sets.map((s) => ({ id: s.id, name: s.name, questions: s.questions.map(M.encProb) }))); }
 
   // ================================================================ home
+  // "Get the Quiz Duel app": Windows and Mac download buttons plus how to get past the first-run warning
+  function appDownloads(full) {
+    const isMac = /Mac/i.test(navigator.platform || navigator.userAgent);
+    const btn = (url, label, main) => url ? h("a", { class: "btn " + (main ? "" : "ghost"), href: url, download: "" }, label)
+      : h("button", { class: "btn ghost", disabled: true, title: "Not ready yet" }, label + " (coming soon)");
+    const order = isMac ? [[DOWNLOADS.mac, "Download for Mac", true], [DOWNLOADS.win, "Download for Windows"]] : [[DOWNLOADS.win, "Download for Windows", true], [DOWNLOADS.mac, "Download for Mac"]];
+    return h("div", { class: "app-dl" },
+      h("div", { class: "row wrap" }, order.map(([u, l, m]) => btn(u, l, m))),
+      DOWNLOADS.win || DOWNLOADS.mac ? null : h("p", { class: "muted small" }, "The app downloads aren't ready yet. Ask your teacher."),
+      full ? h("details", { class: "small" }, h("summary", {}, "How to install"),
+        h("p", {}, h("b", {}, "Windows: "), "open QuizDuel-Setup.exe. If you see \u201cWindows protected your PC\u201d, click ", h("b", {}, "More info"), " then ", h("b", {}, "Run anyway"), "."),
+        h("p", {}, h("b", {}, "Mac: "), "open QuizDuel.dmg and drag Quiz Duel into Applications. The first time, right-click Quiz Duel and choose ", h("b", {}, "Open"),
+          ". On newer Macs, if it's blocked: System Settings \u2192 Privacy & Security \u2192 ", h("b", {}, "Open Anyway"), ".")) : null);
+  }
   function home() {
+    S.preview = null;
     Lock.stop();
     MusicBar.hide();
     Refs.end();
@@ -484,7 +660,10 @@
             h("span", { class: "role-sub" }, "Make a quiz, share the code, watch the class live"))),
         IN_APP ? h("button", { class: "linkish", onclick: quitApp }, "Close Quiz Duel")
           : h("div", { class: "home-links" }, h("button", { class: "linkish", onclick: () => builder(true) }, "Practice alone (no teacher)"),
-            h("button", { class: "linkish", onclick: () => focusSetup() }, "Start a focus session (study timer)"))));
+            h("button", { class: "linkish", onclick: () => focusSetup() }, "Start a focus session (study timer)")),
+        IN_APP ? null : h("section", { class: "card home-app" }, h("h2", {}, "Get the Quiz Duel app"),
+          h("p", { class: "muted" }, "Some quizzes need the app, which locks the computer during the test. Free for Windows and Mac."),
+          appDownloads(true))));
   }
 
   // ================================================================ student: join
@@ -526,7 +705,7 @@
         const payload = await client.connect();
         S.client = client;
         S.quiz = decodeQuiz(cd, payload);
-        if (secLevel(S.quiz.settings) === "high" && !IN_APP) { needApp(nm, em); return; }
+        if (needsApp(S.quiz.settings) && !IN_APP) { needApp(nm, em); return; }
         client.send("join", { total: S.quiz.problems.length, email: em, key: ky || undefined });
         if (client.resume) { resumeFromTeacher(client.resume); return; }
         store.set("md-student", { state: "lobby", code: cd, name: nm, email: em, sid: client.sid });
@@ -576,19 +755,27 @@
   function needApp(nm, em) {
     const c = S.client;
     const link = appLink(c.code, nm, em);
-    const launch = () => { location.href = link; };
-    const isMac = /Mac/i.test(navigator.platform || navigator.userAgent);
-    const dl = (url, label) => url ? h("a", { class: "btn ghost", href: url }, label) : null;
+    const help = h("div", { class: "notice app-help" },
+      h("b", {}, "The app didn't open?"),
+      h("ol", {},
+        h("li", {}, "If you just downloaded it, install it first (or open it once), then press the button again."),
+        h("li", {}, "If your browser asked, choose ", h("b", {}, "Open Quiz Duel"), " (you can tick \u201cAlways allow\u201d)."),
+        h("li", {}, "Or open ", h("b", {}, "Quiz Duel"), " yourself from the desktop or Start menu (on a Mac: Applications) and type this code:")),
+      h("div", { class: "bigcode mono" }, c.code));
+    let left = false;
+    const onBlur = () => { left = true; };
+    const launch = () => { left = false; window.addEventListener("blur", onBlur, { once: true }); location.href = link;
+      setTimeout(() => { window.removeEventListener("blur", onBlur); if (!left) help.classList.add("flash"); }, 3000); };
     show(topbar(APP, c.name), h("main", { class: "narrow" }, card(
       h("h2", {}, "This quiz needs the Quiz Duel app"),
-      h("p", {}, "Your teacher set this quiz to high security, so it runs in the Quiz Duel app, which locks the computer while you work."),
+      h("p", {}, secLevel(S.quiz ? S.quiz.settings : null) === "high" || !(S.quiz && S.quiz.settings.closeGames)
+        ? "Your teacher set this quiz to high security, so it runs in the Quiz Duel app, which locks the computer while you work."
+        : "Your teacher turned on anti-game, so this quiz runs in the Quiz Duel app. It blocks game websites and closes games like Roblox until you finish."),
       h("button", { class: "btn big", onclick: launch }, "Open the Quiz Duel app"),
-      h("p", { class: "muted" }, "If your browser asks, choose ", h("b", {}, "Open Quiz Duel"), ". The app opens with your name, email and quiz code filled in."),
+      h("p", { class: "muted" }, "The app opens with your name, email and quiz code filled in. It can take a few seconds to start."),
+      help,
       h("h3", {}, "Don't have the app yet?"),
-      DOWNLOADS.win || DOWNLOADS.mac
-        ? h("div", { class: "row" }, isMac ? [dl(DOWNLOADS.mac, "Download for Mac"), dl(DOWNLOADS.win, "Windows")] : [dl(DOWNLOADS.win, "Download for Windows"), dl(DOWNLOADS.mac, "Mac")])
-        : h("p", { class: "muted" }, "Ask your teacher where to download it."),
-      h("p", { class: "muted small" }, "After installing, come back here and press Open the Quiz Duel app."))));
+      appDownloads(true))));
     c.close(); S.client = null;
     setTimeout(launch, 400);
   }
@@ -603,6 +790,7 @@
     if (S.quiz.problems.some((p) => p.kind === "long")) rules.push("Written answers are read and graded by your teacher.");
     const level = secLevel(st);
     if (IN_APP) rules.push("You're in the Quiz Duel app: the rest of the computer is locked until you finish.");
+    if (st.closeGames) rules.push("Anti-game is on: games and game websites are closed until you finish.");
     if (level === "low") rules.push("Stay on this page. If you leave it, your teacher is told.");
     else {
       if (!IN_APP) rules.push("The quiz goes full screen. Copy and paste are turned off.");
@@ -615,8 +803,8 @@
       h("h2", {}, `Hi ${S.client.name}!`),
       h("p", { class: "lead" }, `${S.quiz.title}  —  ${S.quiz.problems.length} questions`),
       h("ul", { class: "rules" }, rules.map((r) => h("li", {}, r))), appsEl, mon, start)));
-    if (IN_APP && level === "high") {                      // tell them which programs the app will close
-      QDA.runningApps(+st.closeApps || 0).then((names) => {
+    if (IN_APP && needsApp(st)) {                          // tell them which programs the app will close
+      QDA.runningApps(level === "high" ? +st.closeApps || 0 : 0, !!st.closeGames).then((names) => {
         if (names && names.length) setKids(appsEl, h("div", { class: "notice" }, "When you start, Quiz Duel closes: ", h("b", {}, names.join(", ")), ". Save anything open in them first."));
       }).catch(() => {});
     }
@@ -633,9 +821,9 @@
   async function studentStart() {
     const st = S.quiz.settings;
     if (locked(st) && extraMonitor()) return;
-    if (IN_APP && secLevel(st) === "high") {
+    if (IN_APP && needsApp(st)) {
       try {
-        const closed = await QDA.closeApps(+st.closeApps || 0);
+        const closed = await QDA.closeApps(secLevel(st) === "high" ? +st.closeApps || 0 : 0, !!st.closeGames);
         if (closed && closed.length) S.client.send("res", { how: "apps", what: closed.join(", ") });
       } catch (e) { /* keep going */ }
     }
@@ -652,7 +840,7 @@
       const payload = await client.connect();
       S.client = client;
       S.quiz = decodeQuiz(saved.code, payload);
-      if (secLevel(S.quiz.settings) === "high" && !IN_APP) { needApp(saved.name, saved.email); return; }
+      if (needsApp(S.quiz.settings) && !IN_APP) { needApp(saved.name, saved.email); return; }
       Q.restore(saved);
       client.current = Q.i;
       client.send("join", { total: S.quiz.problems.length, rejoin: true, email: saved.email || "" });
@@ -697,7 +885,7 @@
       const L = r.live, n = Object.values(L.students).filter((x) => x.state !== "redone").length;
       const toGrade = Object.values(L.answers).filter((x) => x.pts === null && !x.skipped).length;
       return h("tr", {}, h("td", { class: "name" }, L.period || "\u2014"), h("td", {}, L.title), h("td", { class: "mono strong" }, L.code),
-        h("td", { class: "num" }, n), h("td", { class: "num" + (toGrade ? " togr" : "") }, toGrade), h("td", {}, SECURITY[secLevel(L)]),
+        h("td", { class: "num" }, n), h("td", { class: "num" + (toGrade ? " togr" : "") }, toGrade), h("td", {}, SECURITY[secLevel(L)] + (L.closeGames ? " + Anti-game" : "")),
         h("td", {}, h("span", { class: "pill " + (r.status === "online" ? "good" : "warn") }, r.status === "online" ? "Live" : "Connecting")),
         h("td", {}, h("button", { class: "btn small", onclick: () => dashboard(r) }, "Open")));
     });
@@ -763,6 +951,7 @@
     const sol = h("input", { type: "checkbox", checked: solo ? true : !!B.sol, onchange: (e) => { B.sol = e.target.checked; } });
     if (!SECURITY[B.security]) B.security = "medium";
     if (B.closeApps === undefined) B.closeApps = 1;
+    if (B.closeGames === undefined) B.closeGames = false;
     const SEC_HELP = {
       low: "Any browser. Nothing is locked; your log shows when a student leaves the quiz page.",
       medium: "Any browser. Full screen, no copy/paste, one screen only. The quiz freezes if a student leaves it, until you unlock them.",
@@ -772,8 +961,16 @@
     const closeSel = h("select", { class: "input", "aria-label": "Programs to close", onchange: (e) => { B.closeApps = +e.target.value; } },
       [[1, "Close music apps (Spotify, Apple Music, VLC, Discord...)"], [2, "Close music apps and other browsers (stops YouTube tabs too)"], [0, "Don't close any apps (remote-control apps are always closed)"]]
         .map(([v, t]) => h("option", { value: v, selected: B.closeApps === v }, t)));
+    const gamesBox = h("input", { type: "checkbox", checked: !!B.closeGames, "aria-label": "Close games", onchange: (e) => { B.closeGames = e.target.checked; } });
     const closeRow = h("label", { class: "field indent", hidden: B.security !== "high" }, h("span", {}, "In the app, before the quiz starts"), closeSel);
-    const secSel = h("select", { class: "input", "aria-label": "Security", onchange: (e) => { B.security = e.target.value; secHelp.textContent = SEC_HELP[B.security]; closeRow.hidden = B.security !== "high"; } },
+    const gamesHelp = h("p", { class: "hint indent" });
+    const paintGames = () => { gamesHelp.textContent = !B.closeGames ? "" : B.security === "high"
+      ? "The app also closes games and game launchers and keeps them closed."
+      : "Students will need the Quiz Duel app for this quiz (a website can't block games). The app blocks every other website, including game sites like Poki and CrazyGames, and closes games like Roblox and Minecraft. Your " + SECURITY[B.security] + " security rules still apply."; };
+    gamesBox.onchange = (e) => { B.closeGames = e.target.checked; paintGames(); };
+    paintGames();
+    const gamesRow = h("div", {}, h("label", { class: "check" }, gamesBox, " ", h("b", {}, "Anti-game"), ": block game websites (Poki, CrazyGames...) and close games (Roblox, Minecraft, Fortnite, Steam...)"), gamesHelp);
+    const secSel = h("select", { class: "input", "aria-label": "Security", onchange: (e) => { B.security = e.target.value; secHelp.textContent = SEC_HELP[B.security]; closeRow.hidden = B.security !== "high"; paintGames(); } },
       Object.entries(SECURITY).map(([v, t]) => h("option", { value: v, selected: B.security === v }, t)));
     if (B.period === undefined) B.period = "";
     const period = h("input", { class: "input", value: B.period, maxlength: 30, placeholder: "e.g. Period 3", "aria-label": "Class or period", oninput: (e) => { B.period = e.target.value; } });
@@ -822,7 +1019,7 @@
       }
     }
 
-    async function build() {
+    async function build(previewOnly) {
       let probs, ttl;
       if (srcVal === "exam") { probs = M.examProblems(); ttl = "Math Final Exam"; }
       else if (srcVal === "builtin") {
@@ -847,7 +1044,8 @@
         refs.push({ title: (r.title || u.hostname).slice(0, 40), url: u.href });
       }
       const settings = { refs, refWin: !!B.refWin, refNotes: (B.refNotes || "").trim().slice(0, 6000), rival: B.form.on ? 0 : B.rival, form: !!B.form.on, perPage: B.form.per, countdown: B.cd, breakEvery: B.brk.on ? B.brk.every : 0, breakSecs: B.brk.secs,
-        music: B.music.on ? M.Music.GROUPS.map(([g]) => g).filter((g) => B.music.groups[g] !== false) : [], show_solutions: solo ? true : !!B.sol, security: solo ? "low" : B.security, closeApps: B.security === "high" ? B.closeApps : 0 };
+        music: B.music.on ? M.Music.GROUPS.map(([g]) => g).filter((g) => B.music.groups[g] !== false) : [], show_solutions: solo ? true : !!B.sol, security: solo ? "low" : B.security, closeApps: B.security === "high" ? B.closeApps : 0, closeGames: !solo && !!B.closeGames };
+      if (previewOnly === true) { preview((B.title || "").trim() || ttl, settings, probs, () => builder(false)); return; }
       if (solo) {
         S.client = null;
         S.quiz = { title: ttl, settings, problems: probs };     // practice alone: answers stay on this computer
@@ -860,7 +1058,7 @@
       const title = (B.title || "").trim() || ttl;
       // students get the questions (and the choices) only - never the answers or solutions
       const studentView = probs.map((p) => { const d = { topic: p.topic, q: p.q, kind: p.kind, base: p.base }; if (p.graph) d.graph = p.graph; if (p.options) d.options = p.options; if (p.tools) d.tools = p.tools; return d; });
-      const live = { code, pin, title, period: (B.period || "").trim().slice(0, 30), made: Date.now(), total: probs.length, show: settings.show_solutions, security: settings.security, closeApps: settings.closeApps,
+      const live = { code, pin, title, period: (B.period || "").trim().slice(0, 30), made: Date.now(), total: probs.length, show: settings.show_solutions, security: settings.security, closeApps: settings.closeApps, closeGames: settings.closeGames,
         payload: seal(code, { title, settings, problems: studentView }), full: probs.map(M.encProb), token: uid(), graded: {}, answers: {}, students: {}, log: [], seen: [], keys: {} };
       const run = Runners.add(live);
       dashboard(run);
@@ -890,9 +1088,10 @@
           h("label", { class: "check" }, refWin, "Also let students open a reference in its own window (weaker: other websites and sound can't be blocked there)"),
           h("label", { class: "field" }, h("span", {}, "Reference notes (shown next to the pages)"), refNotes),
           solo ? null : h("label", { class: "check" }, sol, "Show the answer + explanation after each question"),
-          solo ? null : h("label", { class: "field" }, h("span", {}, "Security"), secSel), solo ? null : secHelp, solo ? null : closeRow)),
+          solo ? null : h("label", { class: "field" }, h("span", {}, "Security"), secSel), solo ? null : secHelp, solo ? null : closeRow, solo ? null : gamesRow)),
       msg,
-      h("div", { class: "row" }, h("button", { class: "btn big", onclick: build }, solo ? "Start practice" : "Create quiz & get code"),
+      h("div", { class: "row" }, h("button", { class: "btn big", onclick: () => build(false) }, solo ? "Start practice" : "Create quiz & get code"),
+        solo ? null : h("button", { class: "btn ghost", onclick: () => build(true), title: "Go through the quiz exactly like a student. Nothing is recorded." }, "Preview as a student"),
         h("button", { class: "btn ghost", onclick: home }, "Back"),
         solo ? null : h("div", { class: "spacer" }), solo ? null : h("button", { class: "btn ghost", onclick: focusTeacher }, "Set up a focus session"))));
     toggle();
@@ -1026,12 +1225,13 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
   const focusCheck = (body) => cyrb53("qd-focus:" + body).slice(-3).toUpperCase();
   // The code also carries a scrambled copy of the teacher's end code, so only the teacher can stop a session early.
   const focusPinHash = (pin, body) => cyrb53(`qd-focus-pin:${pin}:${body}`).slice(-4).toUpperCase();
-  function focusCode(r) { const body = FOCUS_KEYS.map((k) => r[k]).join("-") + "-" + focusPinHash(r.pin, FOCUS_KEYS.map((k) => r[k]).join("-")); return body + "-" + focusCheck(body); }
+  // -G at the end means anti-game (the session runs in the Quiz Duel app, games closed)
+  function focusCode(r) { const body = FOCUS_KEYS.map((k) => r[k]).join("-") + "-" + focusPinHash(r.pin, FOCUS_KEYS.map((k) => r[k]).join("-")) + (r.games ? "-G" : ""); return body + "-" + focusCheck(body); }
   function focusParse(text) {
-    const m = /^(\d{1,3})-(\d{1,2})-(\d{1,2})-(\d{1,2})-(\d{2,3})-([0-9A-F]{4})-([0-9A-F]{3})$/.exec(String(text || "").toUpperCase().replace(/[^0-9A-Z-]/g, ""));
-    if (!m || focusCheck(m.slice(1, 7).join("-")) !== m[7]) return null;
+    const m = /^(\d{1,3})-(\d{1,2})-(\d{1,2})-(\d{1,2})-(\d{2,3})-([0-9A-F]{4})(-G)?-([0-9A-F]{3})$/.exec(String(text || "").toUpperCase().replace(/[^0-9A-Z-]/g, ""));
+    if (!m || focusCheck(m.slice(1, 7).join("-") + (m[7] || "")) !== m[8]) return null;
     const r = {}; FOCUS_KEYS.forEach((k, i) => { r[k] = +m[i + 1]; });
-    r.pinHash = m[6]; r.body = m.slice(1, 6).join("-");
+    r.pinHash = m[6]; r.body = m.slice(1, 6).join("-"); r.games = !!m[7];
     return FOCUS_KEYS.every((k) => r[k] >= FOCUS_LIMITS[k][0] && r[k] <= FOCUS_LIMITS[k][1]) ? r : null;
   }
   function focusFields(r, onchange, disabled) {
@@ -1058,39 +1258,66 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         h("p", { class: "muted" }, "Students study against a timer: focus, short break, repeat. Set the rules, then share the code or the link. A student who uses your code can't change the rules."),
         fields.el,
         h("div", { class: "check wrapline" }, h("b", {}, "Teacher end code"), pinIn, h("span", { class: "muted" }, "6 digits. Keep it secret.")),
-        h("p", { class: "hint" }, "Students on your rules can't end the session themselves. It stops after the last round, or when you type this code on their screen.")),
+        h("p", { class: "hint" }, "Students on your rules can't end the session themselves. It stops after the last round, or when you type this code on their screen."),
+        h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!r.games, "aria-label": "Focus anti-game", onchange: (e) => { r.games = e.target.checked; paint(); } }),
+          " ", h("b", {}, "Anti-game"), ": students can't open games or game websites during the session"),
+        h("p", { class: "hint" }, "With anti-game on, the session runs in the Quiz Duel app (a website can't block games). The app blocks every website and closes games like Roblox, Minecraft and Fortnite until the session ends.")),
       card(h("h3", {}, "Share with students"), h("p", { class: "label" }, "Focus code"), codeEl, h("p", { class: "label" }, "Or send this link"), linkEl,
         h("div", { class: "row" }, h("button", { class: "btn", onclick: () => copy(focusCode(r)) }, "Copy the code"), h("button", { class: "btn ghost", onclick: () => copy(linkEl.textContent) }, "Copy the link"), msg),
         h("div", { class: "row" }, h("button", { class: "btn ghost", onclick: () => focusSetup(focusCode(r)) }, "Try it yourself"), h("button", { class: "btn ghost", onclick: () => builder(false) }, "Back")))));
     paint();
   }
   // student: start a session (with a teacher's code the rules are fixed)
-  function focusSetup(prefill) {
+  function focusSetup(prefill, prefillMine) {
+    if (prefillMine) store.set("qd-focus-mine", Object.assign({}, FOCUS_DEFAULT, prefillMine));
     const r = Object.assign({}, FOCUS_DEFAULT, store.get("qd-focus-mine") || {});
     let locked = false;
     const fields = focusFields(r, () => store.set("qd-focus-mine", r));
     const note = h("p", { class: "msg" });
     const code = h("input", { id: "focus-code", class: "input mono", autocomplete: "off", maxlength: 30, placeholder: "25-5-4-3-60-ABC", value: prefill || "", oninput: () => check() });
     const goal = h("input", { id: "focus-goal", class: "input", maxlength: 80, autocomplete: "off", placeholder: "For example: math homework, pages 40-42" });
+    const games = h("input", { type: "checkbox", "aria-label": "Block games", checked: !!(store.get("qd-focus-mine") || {}).games,
+      onchange: (e) => { if (!locked) { r.games = e.target.checked; store.set("qd-focus-mine", r); } } });
+    const gamesNote = h("span", { class: "muted small" });
     function check() {
       const typed = code.value.trim(), got = focusParse(typed);
       locked = !!got;
-      if (got) { fields.set(got, true); note.textContent = "Your teacher's rules are set."; note.className = "msg good"; }
-      else { fields.set(Object.assign({}, FOCUS_DEFAULT, store.get("qd-focus-mine") || {}), false); note.textContent = typed ? "That focus code isn't right. Check it, or clear the box to pick your own times." : ""; note.className = "msg bad"; }
+      if (got) { fields.set(got, true); note.textContent = "Your teacher's rules are set."; note.className = "msg good"; games.checked = got.games; games.disabled = true; }
+      else { fields.set(Object.assign({}, FOCUS_DEFAULT, store.get("qd-focus-mine") || {}), false); note.textContent = typed ? "That focus code isn't right. Check it, or clear the box to pick your own times." : ""; note.className = "msg bad";
+        games.disabled = false; games.checked = !!(store.get("qd-focus-mine") || {}).games; }
+      gamesNote.textContent = IN_APP ? "" : " (opens in the Quiz Duel app)";
     }
     const start = () => {
       if (code.value.trim() && !locked) { code.focus(); return; }
       const got = locked ? focusParse(code.value.trim()) : null;
-      focusRun({ focus: r.focus * 60, brk: r.brk * 60, rounds: r.rounds, pauses: r.pauses, pauseSecs: r.pauseSecs, goal: goal.value.trim(), locked, code: locked ? code.value.trim().toUpperCase() : "",
-        pinHash: got ? got.pinHash : "", body: got ? got.body : "" });
+      const cfg = { focus: r.focus * 60, brk: r.brk * 60, rounds: r.rounds, pauses: r.pauses, pauseSecs: r.pauseSecs, goal: goal.value.trim(), locked, code: locked ? code.value.trim().toUpperCase() : "",
+        pinHash: got ? got.pinHash : "", body: got ? got.body : "", games: got ? got.games : games.checked };
+      if (cfg.games && !IN_APP) { focusNeedApp(cfg); return; }
+      focusRun(cfg);
     };
     show(topbar(APP, "Focus session"), h("main", { class: "narrow" }, card(h("h2", {}, "Focus session"),
       h("p", { class: "muted" }, "A study timer: focus with nothing else on screen, take a short break, repeat. It stops by itself after the last round."),
       h("label", { class: "field" }, h("span", {}, "Focus code from your teacher (leave empty to pick your own times)"), code), note,
       fields.el,
       h("label", { class: "field" }, h("span", {}, "What are you working on? (optional)"), goal),
+      h("label", { class: "check" }, games, " ", h("b", {}, "Anti-game"), ": no games or game websites until the session ends", gamesNote),
       h("div", { class: "row" }, h("button", { class: "btn big", onclick: start }, "Start focusing"), h("button", { class: "btn ghost", onclick: home }, "Back")))));
     check();
+  }
+  // anti-game focus sessions run in the app: open it with the same code or the same times
+  function focusNeedApp(cfg) {
+    const mine = [cfg.focus / 60, cfg.brk / 60, cfg.rounds, cfg.pauses, cfg.pauseSecs].join("-");
+    const link = "quizduel://focus?" + (cfg.locked ? "focus=" + encodeURIComponent(cfg.code) : "mine=" + mine + "-G");
+    show(topbar(APP, "Focus session"), h("main", { class: "narrow" }, card(
+      h("h2", {}, "Anti-game sessions run in the Quiz Duel app"),
+      h("p", {}, "A website can't stop games, so this session runs in the Quiz Duel app. It blocks game websites and closes games like Roblox until the session ends."),
+      h("button", { class: "btn big", onclick: () => { location.href = link; } }, "Open the Quiz Duel app"),
+      h("div", { class: "notice app-help" }, h("b", {}, "The app didn't open?"),
+        h("p", {}, "Open ", h("b", {}, "Quiz Duel"), " yourself, choose ", h("b", {}, "Start a focus session"), cfg.locked ? " and type this focus code:" : " and tick Anti-game."),
+        cfg.locked ? h("div", { class: "bigcode mono focus-code" }, cfg.code) : null),
+      h("h3", {}, "Don't have the app yet?"), appDownloads(true),
+      h("div", { class: "row" }, h("button", { class: "btn ghost", onclick: () => focusSetup(cfg.locked ? cfg.code : "") }, "Back")))));
+    location.href = link;
   }
   const Focus = { active: false, phase: null, onLeave: null };
   function focusRun(cfg, resumed) {
@@ -1100,6 +1327,11 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     const el = document.documentElement;
     if (!IN_APP && el.requestFullscreen && !document.fullscreenElement) el.requestFullscreen().catch(() => {});
     M.Music.chime(1);
+    const gamesMsg = h("p", { class: "muted small", "aria-live": "polite" });
+    if (cfg.games && IN_APP) {
+      QDA.closeApps(0, true).then((closed) => { gamesMsg.textContent = "Anti-game is on" + (closed && closed.length ? `: closed ${closed.join(", ")}.` : "."); }, () => {});
+      QDA.lock(true, { level: 0, games: true, strict: false }).catch(() => {});
+    } else if (cfg.games) gamesMsg.textContent = "Anti-game only works in the Quiz Duel app.";
     const phaseEl = h("p", { class: "focus-phase" }), timeEl = h("div", { class: "focus-time", role: "timer" }), fill = h("div", { class: "bar-fill focus-fill" });
     const dots = h("div", { class: "focus-dots", "aria-hidden": "true" });
     const info = h("p", { class: "muted focus-info", "aria-live": "polite" });
@@ -1167,6 +1399,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       if (!Focus.active) return;
       if (early && st.phase === "focus") st.focused += (Date.now() - st.phaseStart) / 1000;
       Focus.active = false; Focus.locked = false; Focus.onLeave = null; document.title = APP;
+      if (cfg.games && IN_APP) QDA.lock(false).catch(() => {});
       store.del("qd-focus-run");
       MusicBar.hide();
       if (!IN_APP && document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
@@ -1183,7 +1416,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         h("div", { class: "row" }, h("button", { class: "btn", onclick: home }, "Done"), h("button", { class: "btn ghost", onclick: () => focusSetup() }, "Another session")))));
     }
     const box = h("section", { class: "card focus-card" }, phaseEl, cfg.goal ? h("p", { class: "focus-goal" }, cfg.goal) : null, timeEl,
-      h("div", { class: "bar" }, fill), dots, info, h("div", { class: "row center" }, pauseBtn, skipBtn, fsBtn, endBtn), pinRow);
+      h("div", { class: "bar" }, fill), dots, info, gamesMsg, h("div", { class: "row center" }, pauseBtn, skipBtn, fsBtn, endBtn), pinRow);
     show(topbar(APP, cfg.locked ? "Focus session \u00b7 teacher's rules" : "Focus session"), h("main", { class: "narrow focus-main" }, box));
     Focus.active = true; Focus.locked = !!cfg.locked; Focus.code = cfg.code || ""; Focus.end = () => finish(true);
     Focus.onLeave = () => { const now = Date.now(); if (st.phase === "focus" && now - st.lastLeft > 3000) { st.lastLeft = now; st.left++; remember(); paint(); } };
@@ -1203,6 +1436,50 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
   const TYPE_TAG = { choice: "choice", text: "short", long: "long", yesno: "yes/no" };
   const BASE_TIME = { choice: 20, text: 25, long: 120, yesno: 12, math: 40 };
 
+  // ================================================================ printing (paper copies for the teacher)
+  // Builds the page in a hidden print area, prints it, then removes it. Works in any browser's print dialog
+  // (choose "Save as PDF" there to keep a file).
+  function printOut(title, ...body) {
+    const old = document.getElementById("print-area"); if (old) old.remove();
+    const area = h("div", { id: "print-area" }, ...body);
+    document.body.append(area); document.body.classList.add("printing");
+    const was = document.title; document.title = title;
+    const done = () => { document.body.classList.remove("printing"); area.remove(); document.title = was; window.removeEventListener("afterprint", done); };
+    window.addEventListener("afterprint", done);
+    setTimeout(() => { window.print(); setTimeout(() => { if (document.body.classList.contains("printing")) done(); }, 1000); }, 50);
+  }
+  const lines = (n) => h("div", { class: "p-lines" }, Array.from({ length: n }, () => h("div", { class: "p-line" })));
+  // one question on paper; key = show the answer
+  function printQuestion(p, i, key) {
+    const kind = p.kind;
+    const kids = [h("div", { class: "p-q" }, h("b", {}, `${i + 1}. `), p.q)];
+    if (kind === "choice") kids.push(h("ol", { class: "p-opts" }, p.options.map((o, j) => h("li", { class: key && j === p.ans ? "p-right" : "" }, h("span", { class: "p-bubble" }, String.fromCharCode(65 + j)), o, key && j === p.ans ? "  ✓" : ""))));
+    else if (kind === "yesno") kids.push(h("p", { class: "p-yn" }, ["Yes", "No"].map((v) => h("span", { class: key && p.ans === v.toLowerCase() ? "p-right" : "" }, h("span", { class: "p-bubble" }, ""), v + (key && p.ans === v.toLowerCase() ? "  ✓" : "")))));
+    else if (!key) kids.push(lines(kind === "long" ? 8 : 1));
+    if (key) {
+      if (kind === "long") kids.push(h("p", { class: "p-ans" }, h("b", {}, "Model answer: "), p.sol || "(none written — you grade it)"));
+      else if (kind !== "choice" && kind !== "yesno") kids.push(h("p", { class: "p-ans" }, h("b", {}, "Answer: "), kind === "text" ? p.ans.join("  /  ") : M.answerText(p)));
+      if (p.teacherSol && p.sol && kind !== "long") kids.push(h("p", { class: "p-ans muted" }, p.sol));
+    }
+    return h("div", { class: "p-item" }, ...kids);
+  }
+  // the quiz on paper, for students (blank) or as an answer key
+  function printQuiz(name, questions, key, period) {
+    printOut(name + (key ? " — answer key" : ""),
+      h("div", { class: "p-head" }, h("h1", {}, name + (key ? " — Answer key" : "")),
+        key ? h("p", {}, `${questions.length} questions` + (period ? ` · ${period}` : ""))
+          : h("div", { class: "p-name" }, h("span", {}, "Name ", h("span", { class: "p-blank" })), h("span", {}, "Date ", h("span", { class: "p-blank short" })), h("span", {}, "Period ", h("span", { class: "p-blank short" }, period || "")))),
+      questions.map((p, i) => printQuestion(p, i, key)));
+  }
+  // a little "Print" menu: quiz for students / answer key
+  function printMenu(getName, getQuestions, period) {
+    const wrap = h("span", { class: "print-menu" });
+    const go = (key) => { const qs = getQuestions(); if (!qs.length) { alert("This quiz has no questions yet."); return; } printQuiz(getName(), qs, key, period); };
+    const sel = h("select", { class: "input small", "aria-label": "Print", onchange: (e) => { const v = e.target.value; e.target.value = ""; if (v) go(v === "key"); } },
+      h("option", { value: "" }, "Print..."), h("option", { value: "quiz" }, "Print the quiz (for students)"), h("option", { value: "key" }, "Print the answer key"));
+    wrap.append(sel); return wrap;
+  }
+
   function editor(set, note) {
     let idx = null, type = "choice";
     let opts = ["", "", "", ""], correct = 0, textVal = "", ynVal = "yes", mathVal = "", mathKind = "";
@@ -1216,7 +1493,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     const name = h("input", { class: "input", value: set.name, maxlength: 40, "aria-label": "Quiz name", oninput: (e) => { set.name = e.target.value.trim() || "Untitled quiz"; saveSets(); } });
     const list = h("ol", { class: "qlist" });
     const q = h("textarea", { class: "input", rows: 4, placeholder: "Type the question..." });
-    const typeSel = h("select", { class: "input", onchange: (e) => { type = e.target.value; drawFields(); } }, Q_TYPES.map(([k, n]) => h("option", { value: k }, n)));
+    const typeSel = h("select", { class: "input", "aria-label": "Question type", onchange: (e) => { type = e.target.value; drawFields(); } }, Q_TYPES.map(([k, n]) => h("option", { value: k }, n)));
     const fields = h("div", { class: "fields" });
     const solLbl = h("span", {}, "");
     const sol = h("textarea", { class: "input", rows: 3 });
@@ -1312,6 +1589,8 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     }
     show(topbar(APP, "Teacher — write a quiz"), h("main", { class: "wide" },
       h("div", { class: "row quiz-name" }, h("label", { class: "field grow" }, h("span", {}, "Quiz name"), name),
+        h("button", { class: "btn small ghost", onclick: () => { if (!set.questions.length) { alert("This quiz has no questions yet."); return; } preview(set.name, null, set.questions, () => editor(set)); } }, "Preview as a student"),
+        printMenu(() => set.name, () => set.questions),
         h("button", { class: "btn small ghost", onclick: exportSet }, "Export (share with a teacher)"),
         h("button", { class: "btn small ghost", onclick: delSet }, "Delete this quiz")),
       h("div", { class: "editor" },
@@ -1336,7 +1615,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     live.graded = live.graded || {}; live.answers = live.answers || {}; live.keys = live.keys || {};
     live.seen = live.seen || []; live.log = live.log || []; live.students = live.students || {};
     const full = live.full.map(M.decProb);
-    const r = { live, full, dirty: true, status: "connecting", stopped: false };
+    const r = { live, full, dirty: true, status: "connecting", stopped: false, typing: {}, onTyping: null };
     const log = r.log = (text) => {
       live.log.push([Date.now(), text]);
       if (live.log.length > 400) live.log.splice(0, live.log.length - 400);
@@ -1361,6 +1640,15 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     };
     // returns the grading result for answers (sent back to the student)
     function apply(ev) {
+      if (ev.type === "typing") {                 // live view only: kept in memory, not logged or saved
+        const s0 = live.students[ev.sid];
+        if (!s0 || s0.state === "done" || s0.state === "redone") return null;
+        const qn = Math.max(1, Math.min(full.length, +ev.qn || 1));
+        r.typing[ev.sid] = { qn, text: String(ev.text || "").slice(0, 20000), at: Date.now() };
+        s0.last = Date.now();
+        if (r.onTyping) r.onTyping(ev.sid);
+        return null;
+      }
       if (!live.students[ev.sid] && Object.keys(live.students).some((k) => k.startsWith(ev.sid + "~")) && ev.type === "hb") return null;   // an old try
       if (ev.eid && live.graded[ev.eid]) return live.graded[ev.eid];        // answer sent twice after a reconnect
       if (ev.eid && live.seen.includes(ev.eid)) return null;
@@ -1551,6 +1839,24 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
           h("span", { class: "bigkey mono" }, key), ` ${k.type} key — ${k.used ? "used " + ago(k.used) : "not used yet"}`))) : null);
       return out;
     }
+    // live view of one student: which question they're on and what they're typing right now
+    const liveBox = h("div", { class: "live-view" });
+    function paintLive() {
+      if (!reviewMode || !reviewMode.sid || !live.students[reviewMode.sid]) return;
+      const s = live.students[reviewMode.sid], t = run.typing[reviewMode.sid];
+      const working = s.state === "working" || s.state === "lobby";
+      if (!working) { setKids(liveBox, h("p", { class: "live-head" }, h("span", { class: "live-dot off" }), s.state === "done" ? "Finished — see the answers below." : "Not in the quiz right now.")); return; }
+      const qn = t && Date.now() - t.at < 60000 ? t.qn : Math.min(s.i + 1, s.total || full.length);
+      const p = full[qn - 1] || { q: "", kind: "text" };
+      const fresh = t && t.qn === qn && t.text;
+      setKids(liveBox,
+        h("p", { class: "live-head" }, h("span", { class: "live-dot" + (fresh && Date.now() - t.at < 8000 ? " typing" : "") }), h("b", {}, "Live"), ` — ${s.frozen ? "frozen, " : ""}on question ${qn} of ${s.total || full.length}`,
+          fresh ? h("span", { class: "muted small" }, `  · updated ${ago(t.at)}`) : null),
+        h("p", { class: "rev-q" }, p.q.split("\n")[0]),
+        fresh ? (p.kind === "long" ? h("div", { class: "rev-a paper live-text" }, richClean(t.text)) : h("pre", { class: "rev-a live-text" }, p.kind === "choice" && p.options && p.options[+t.text] !== undefined ? p.options[+t.text] : t.text))
+          : h("p", { class: "muted small" }, "Nothing typed yet on this question. What they type shows up here every few seconds."));
+    }
+    run.onTyping = (sid) => { if (reviewMode && reviewMode.sid === sid && liveBox.isConnected) paintLive(); };
     function drawReview() {
       if (!reviewMode) { review.hidden = true; return; }
       review.hidden = false;
@@ -1564,7 +1870,9 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       items.sort((x, y) => x[1].qn - y[1].qn || x[1].t - y[1].t);
       setKids(review,
         h("div", { class: "row" }, h("h3", {}, head), h("div", { class: "spacer" }), h("button", { class: "btn small ghost", onclick: () => { reviewMode = null; drawReview(); } }, "Close")),
+        reviewMode.sid && live.students[reviewMode.sid].state !== "redone" ? liveBox : null,
         reviewMode.sid && live.students[reviewMode.sid].state !== "redone" ? keyBox(reviewMode.sid) : null,
+        reviewMode.sid ? h("h4", { class: "rev-sub" }, "Handed-in answers") : null,
         items.length ? items.map(([eid, a]) => {
           const p = full[a.qn - 1] || { q: "", kind: "text" };
           const need = a.pts === null && !a.skipped;
@@ -1575,6 +1883,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
             h("div", { class: "row small-gap" }, h("span", { class: "muted small" }, need ? "Give points:" : "Points:"),
               [0, 0.5, 1].map((v) => h("button", { class: "btn small " + (a.pts === v ? "" : "ghost"), onclick: () => setGrade(eid, v), "aria-pressed": a.pts === v ? "true" : "false" }, v === 0.5 ? "½" : String(v)))));
         }) : h("p", { class: "muted" }, reviewMode.pending ? "Nothing is waiting. Nice." : "No answers yet."));
+      paintLive();
     }
     function render(force) {
       const txt = { online: "Live — students can join", connecting: "Connecting...", reconnecting: "Reconnecting...", error: "Can't reach the connection service — check the internet." }[run.status] || run.status;
@@ -1583,7 +1892,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       tbody.replaceChildren(...(rows.length ? rows.map(([sid, s]) => {
         const [st, cls] = statusOf(s);
         const box = s.state === "redone" ? "" : h("input", { type: "checkbox", checked: selected.has(sid), onchange: (e) => { if (e.target.checked) selected.add(sid); else selected.delete(sid); }, "aria-label": "select " + s.name });
-        const nameBtn = h("button", { class: "name-btn", title: "See this student's answers", onclick: () => { reviewMode = { sid }; drawReview(); review.scrollIntoView({ block: "nearest" }); } }, s.name);
+        const nameBtn = h("button", { class: "name-btn", title: "Watch this student live and see their answers", onclick: () => { reviewMode = { sid }; drawReview(); review.scrollIntoView({ block: "nearest" }); } }, s.name);
         return h("tr", { class: cls }, h("td", {}, box), h("td", { class: "name" }, nameBtn, s.email ? h("div", { class: "email muted small" }, s.email) : null), h("td", {}, st), h("td", { class: "num" }, `${s.i}/${s.total}`),
           h("td", { class: "num" }, s.right), h("td", { class: "num" }, s.half), h("td", { class: "num" }, s.wrong), h("td", { class: "num" }, s.skipped),
           h("td", { class: "num" + (s.togr ? " togr" : "") }, s.togr || 0),
@@ -1624,6 +1933,30 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       }
       download(`results_${(live.period || live.code).replace(/[^\w-]+/g, "_")}.csv`, new Blob(["﻿" + rows.map((r) => r.map(cell).join(",")).join("\r\n")], { type: "text/csv" }));
     }
+    // results on paper: the class table, then each student's answers on their own page
+    function printResults(withAnswers) {
+      const byName = Object.entries(live.students).filter(([, s]) => s.state !== "redone").sort((a, b) => a[1].name.localeCompare(b[1].name));
+      if (!byName.length) { msg.textContent = "No students yet."; return; }
+      const nm = (live.period ? live.period + " — " : "") + live.title;
+      const table = h("table", { class: "p-table" },
+        h("thead", {}, h("tr", {}, ["Student", "Email", "Done", "Right", "Half", "Wrong", "Skipped", "To grade", "Score", "Left quiz"].map((x) => h("th", {}, x)))),
+        h("tbody", {}, byName.map(([, s]) => h("tr", {}, h("td", {}, s.name), h("td", {}, s.email || ""), h("td", {}, `${s.i}/${s.total}`), h("td", {}, s.right), h("td", {}, s.half), h("td", {}, s.wrong), h("td", {}, s.skipped), h("td", {}, s.togr || 0), h("td", {}, h("b", {}, M.fmtPts(s.score))), h("td", {}, s.left)))));
+      const pages = withAnswers ? byName.map(([sid, s]) => h("div", { class: "p-student" },
+        h("h2", {}, s.name), h("p", { class: "muted" }, (s.email ? s.email + " · " : "") + `Score ${M.fmtPts(s.score)} out of ${s.total}`),
+        Object.values(live.answers).some((a) => a.sid === sid) ? null : h("p", {}, "No answers yet."),
+        Object.values(live.answers).filter((a) => a.sid === sid).sort((x, y) => x.qn - y.qn).map((a) => {
+          const p = full[a.qn - 1] || { q: "", kind: "text" };
+          return h("div", { class: "p-item" }, h("div", { class: "p-q" }, h("b", {}, `${a.qn}. `), p.q),
+            h("p", { class: "p-their" }, h("b", {}, "Answer: "), a.skipped ? "(skipped)" : shownRaw(p, a.raw)),
+            h("p", { class: "p-ans" }, p.kind === "long" ? (p.sol ? "Model answer: " + p.sol : "") : "Correct answer: " + M.answerText(p)),
+            h("p", { class: "p-pts" }, "Points: " + (a.pts === null ? "not graded yet" : M.fmtPts(a.pts))));
+        }))) : [];
+      printOut("Results — " + nm, h("div", { class: "p-head" }, h("h1", {}, "Results — " + nm), h("p", {}, `Quiz code ${live.code} · ${live.total} questions · printed ${new Date().toLocaleString()}`)), table, pages);
+    }
+    const resultsSel = h("select", { class: "input small", "aria-label": "Print", onchange: (e) => { const v = e.target.value; e.target.value = "";
+      if (v === "table") printResults(false); else if (v === "all") printResults(true); else if (v) printQuiz(live.title, full, v === "key", live.period); } },
+      h("option", { value: "" }, "Print..."), h("option", { value: "table" }, "Print the results table"), h("option", { value: "all" }, "Print results + every student's answers"),
+      h("option", { value: "quiz" }, "Print the quiz (for students)"), h("option", { value: "key" }, "Print the answer key"));
     function endQuiz() {
       if (!confirm(`End "${live.title}"${live.period ? ` (${live.period})` : ""}? Students won't be able to send any more answers. Save the results first if you need them.`)) return;
       Runners.remove(run);
@@ -1644,8 +1977,9 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
           h("p", { class: "muted" }, `${live.total} questions. Students open this website → Student → type their name, email and the code.`)),
         card(h("p", { class: "label" }, "Unlock code — keep it secret"), h("div", { class: "pin mono" }, live.pin),
           h("p", { class: "muted" }, "Type it on a student's screen to unfreeze them or let them leave.")),
-        card(h("p", { class: "label" }, "Security: " + SECURITY[level]), h("p", { class: "muted" }, secText),
-          level === "high" && (DOWNLOADS.win || DOWNLOADS.mac) ? h("p", { class: "small" }, "App download: ",
+        card(h("p", { class: "label" }, "Security: " + SECURITY[level] + (live.closeGames ? " + Anti-game" : "")), h("p", { class: "muted" }, secText),
+          live.closeGames ? h("p", { class: "muted" }, "Anti-game: students need the Quiz Duel app; it blocks game websites and closes games like Roblox.") : null,
+          (level === "high" || live.closeGames) && (DOWNLOADS.win || DOWNLOADS.mac) ? h("p", { class: "small" }, "App download: ",
             DOWNLOADS.win ? h("a", { href: DOWNLOADS.win }, "Windows") : null, DOWNLOADS.win && DOWNLOADS.mac ? " · " : "", DOWNLOADS.mac ? h("a", { href: DOWNLOADS.mac }, "Mac") : null) : null)),
       needEl,
       h("section", { class: "card table-card" },
@@ -1656,13 +1990,14 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
           h("button", { class: "btn small", onclick: () => act("unlock", "Sent unlock to") }, "Unlock"),
           h("button", { class: "btn small warn", onclick: () => act("unlock", "Sent unlock to", true) }, "Unlock all frozen"),
           h("button", { class: "btn small navy", onclick: () => act("leave", "Let leave:") }, "Let leave"),
-          h("button", { class: "btn small good", onclick: csv }, "Save results (CSV)"), msg, h("div", { class: "spacer" }),
+          h("button", { class: "btn small good", onclick: csv }, "Save results (CSV)"), resultsSel,
+          h("button", { class: "btn small ghost", onclick: () => { let st = null; try { st = unseal(live.code, live.payload).settings; } catch (e) {} preview(live.title, st, full, () => dashboard(run)); } }, "Preview as a student"), msg, h("div", { class: "spacer" }),
           h("button", { class: "btn small ghost", onclick: endQuiz }, "End quiz"))),
       review,
       card(h("p", { class: "label" }, "What's happening"), logEl),
       h("p", { class: "muted center" }, "Keep this tab open during the quiz — it checks the answers for all your running quizzes. If you close it by accident, open the website again and sign in; your quizzes come back.")));
     render(true);
-    every(1000, () => render(false));
+    every(1000, () => { render(false); if (reviewMode && reviewMode.sid) paintLive(); });
   }
 
   // ================================================================ lockdown (browser)
@@ -1672,7 +2007,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       this.soft = secLevel(st) === "low";
       this.on = !this.soft; this.lost = 0; this.monTick = 0; this.away = false;
       if (!this.soft) this.enterFullscreen();
-      if (IN_APP && secLevel(st) === "high") QDA.lock(true, { level: +st.closeApps || 0 }).catch(() => {});
+      if (IN_APP && needsApp(st)) QDA.lock(true, { level: secLevel(st) === "high" ? +st.closeApps || 0 : 0, games: !!st.closeGames, strict: secLevel(st) === "high" }).catch(() => {});
       clearInterval(this.timer);
       this.timer = setInterval(() => this.watch(), 300);
     },
@@ -2168,7 +2503,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       later(1000, step);
     },
     header() {
-      const left = APP + (S.client ? `  ·  ${S.client.name}` : "");
+      const left = S.preview ? APP + "  ·  Student preview" : APP + (S.client ? `  ·  ${S.client.name}` : "");
       const leaveBtn = Lock.on ? h("button", { class: "btn tiny-btn", onclick: () => this.requestLeave() }, "Leave quiz (Esc)") : null;
       this.scoreEl = h("span", {});
       this.paintScore();
@@ -2183,7 +2518,9 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         paint();
         const tm = setInterval(() => { if (!net.isConnected) clearInterval(tm); else paint(); }, 1000);
       }
-      return topbar(left, [net, this.scoreEl], [leaveBtn, Refs.button()]);
+      const pv = S.preview ? [h("span", { class: "pill warn", title: "Nothing you do here is recorded or sent." + (S.preview.security !== "low" || S.preview.games ? " The lock (" + [S.preview.security !== "low" ? SECURITY[S.preview.security] + " security" : "", S.preview.games ? "anti-game" : ""].filter(Boolean).join(" + ") + ") is off in preview." : "") }, "Preview — nothing is recorded"),
+        h("button", { class: "btn tiny-btn", onclick: () => exitPreview() }, "Exit preview")] : null;
+      return topbar(left, [net, this.scoreEl], [pv, leaveBtn, Refs.button()]);
     },
     paintScore() {
       if (!this.scoreEl) return;
@@ -2506,7 +2843,9 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
           r.sol && r.pts !== 1 ? h("pre", { class: "sol" }, r.sol) : null);
       });
       const leave = () => { if (client) { client.close(); S.client = null; } if (IN_APP) quitApp(); else home(); };
-      const doneBtn = client
+      const doneBtn = S.preview
+        ? [h("button", { class: "btn", onclick: () => exitPreview() }, "Back to the teacher page")]
+        : client
         ? h("button", { class: "btn", onclick: leave }, IN_APP ? "Done — close Quiz Duel" : "Done")
         : [h("button", { class: "btn", onclick: () => builder(true) }, "Practice again"), h("button", { class: "btn ghost", onclick: home }, "Home")];
       show(topbar(APP, client ? client.name : "Results"), h("main", { class: "wide" }, card(
@@ -2528,17 +2867,37 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
   // keeps an unfinished answer on this computer (k = question index)
   let draftTimers = [];
   const stopDrafts = () => { draftTimers.forEach(clearInterval); draftTimers = []; };
+  // the teacher's live view: what the student is typing right now (sent only when it changes, never queued)
+  function sendTyping(k, v) {
+    const c = S.client; if (!c || c.closed || S.preview) return;
+    c.raw({ sid: c.sid, name: c.name, type: "typing", t: Date.now(), eid: uid(), i: c.current, qn: k + 1, text: String(v || "").slice(0, 20000) });
+  }
   function keepDraft(k, getText, put) {
     const d = Q.drafts && Q.drafts[k];
     if (d && put) { try { put(d); } catch (e) { /* ignore */ } }
     let last = d || "";
     draftTimers.push(setInterval(() => {
       if (!Q.active || Q.results[k]) return;
-      const v = getText(); if (v !== last) { last = v; Q.drafts[k] = v; Q.save(); }
+      const v = getText(); if (v !== last) { last = v; Q.drafts[k] = v; Q.save(); sendTyping(k, v); }
     }, 2000));
   }
   function stat(label, value) { return h("div", { class: "stat" }, h("span", { class: "stat-v" }, String(value)), h("span", { class: "stat-l" }, label)); }
 
+  // ---- student preview: the teacher goes through the quiz exactly as students see it; nothing is sent or recorded.
+  // (High security and anti-game need the app, so the preview runs without the lock.)
+  function preview(title, settings, problems, back) {
+    const st = Object.assign({ refs: [], rival: 0, countdown: 0, music: [], show_solutions: true }, settings || {});
+    S.client = null;
+    S.preview = { back, security: secLevel(st), games: !!st.closeGames };
+    S.quiz = { title, settings: Object.assign({}, st, { security: "low", closeApps: 0, closeGames: false }), problems: problems.map((p) => M.decProb(M.encProb(p))) };
+    beginQuiz();
+  }
+  async function exitPreview() {
+    const back = S.preview && S.preview.back;
+    if (Q.active) await Q.finish(true);
+    S.preview = null;
+    (back || home)();
+  }
   function beginQuiz() {
     Q.reset();
     Q.setup();
@@ -2576,10 +2935,14 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
   }
 
   // test hooks (used only by the automated browser test)
-  window.__md = { aiPrompt, aiParse, aiQuestions, focusRun, focusCode, focusParse, S, Q, Lock, home, Runners, setDisplays: (n) => { appDisplays = n; } };
+  window.__md = { writer, richClean, aiPrompt, aiParse, aiQuestions, focusRun, focusCode, focusParse, S, Q, Lock, home, Runners, setDisplays: (n) => { appDisplays = n; } };
   const savedFocus = store.get("qd-focus-run");
   if (savedFocus && savedFocus.cfg && savedFocus.cfg.locked && savedFocus.st && Date.now() < savedFocus.st.ends + 10 * 60000) focusRun(savedFocus.cfg, savedFocus.st);
-  else if (QS.get("focus") && !IN_APP) { store.del("qd-focus-run"); focusSetup(QS.get("focus")); }
+  else if (QS.get("focus")) { store.del("qd-focus-run"); focusSetup(QS.get("focus")); }
+  else if (/^\d{1,3}-\d{1,2}-\d{1,2}-\d{1,2}-\d{2,3}-G$/.test(QS.get("mine") || "")) {
+    const v = QS.get("mine").split("-").map(Number);
+    focusSetup("", { focus: v[0], brk: v[1], rounds: v[2], pauses: v[3], pauseSecs: v[4], games: true });
+  }
   else if (URL_CODE) {
     const saved = store.get("md-student");
     if (saved && saved.code === URL_CODE && saved.state === "quiz") rejoinStudent(saved);

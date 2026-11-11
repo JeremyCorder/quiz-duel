@@ -1,6 +1,9 @@
 # Builds the Quiz Duel app for Windows and Mac and attaches the installers to a GitHub release.
+# Run it: publish a GitHub release (the installers are attached to it), or press "Run workflow" on the Actions tab.
 name: Build Quiz Duel app
 on:
+  push:
+    tags: ["app-v*"]        # pushing a tag like app-v1.0.3 builds the app and makes the release
   release:
     types: [published]
   workflow_dispatch:
@@ -37,7 +40,7 @@ jobs:
           path: |
             desktop/dist/*.exe
             desktop/dist/*.dmg
-      - if: github.event_name == 'release'
+      - if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/app-v')
         uses: softprops/action-gh-release@v2
         with:
           files: |

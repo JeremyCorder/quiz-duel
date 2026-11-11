@@ -10,7 +10,7 @@ def safe(js):  # a script may not contain the text "</script"
 import os, json
 # where students download the Quiz Duel app: the GitHub releases of this project
 # (Netlify sets REPOSITORY_URL while it builds; QD_DOWNLOAD_BASE overrides it)
-repo = os.environ.get("QD_DOWNLOAD_BASE") or (os.environ.get("REPOSITORY_URL", "").rstrip("/") + "/releases/latest/download" if os.environ.get("REPOSITORY_URL", "").startswith("https://github.com/") else "")
+repo = os.environ.get("QD_DOWNLOAD_BASE") or (os.environ.get("REPOSITORY_URL", "").rstrip("/") + "/releases/latest/download" if os.environ.get("REPOSITORY_URL", "").startswith("https://github.com/") else "https://github.com/JeremyCorder/quiz-duel/releases/latest/download")
 downloads = {"win": repo + "/QuizDuel-Setup.exe" if repo else "", "mac": repo + "/QuizDuel.dmg" if repo else ""}
 html = read("template.html")
 html = html.replace("/*EXAMBLOB*/", "window.QD_DOWNLOADS = " + json.dumps(downloads) + ";\n" + safe(read("exam_blob.js")), 1)

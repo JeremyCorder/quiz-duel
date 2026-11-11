@@ -1,7 +1,7 @@
 {
   "name": "quiz-duel",
   "version": "1.0.0",
-  "description": "Quiz Duel: locked quiz window",
+  "description": "Quiz Duel: locked quiz app for students. Opens your teacher's quiz full screen.",
   "main": "app/main.js",
   "scripts": {
     "start": "electron .",
@@ -41,7 +41,16 @@
         }
       ],
       "icon": "build/icon.png",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": true,
+      "extraResources": [
+        {
+          "from": "bin",
+          "to": "bin",
+          "filter": [
+            "*.exe"
+          ]
+        }
+      ]
     },
     "nsis": {
       "oneClick": true,
@@ -65,6 +74,7 @@
       "extendInfo": {
         "NSHumanReadableCopyright": "Quiz Duel"
       }
-    }
+    },
+    "copyright": "Quiz Duel"
   }
 }

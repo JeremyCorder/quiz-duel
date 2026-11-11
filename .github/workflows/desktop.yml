@@ -31,6 +31,13 @@ jobs:
           SITE_URL: ${{ vars.QUIZDUEL_SITE_URL }}
         run: |
           echo "{ \"siteUrl\": \"$SITE_URL\" }" > app/config.json
+      - name: Build the keyboard guard (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force bin | Out-Null
+          & "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize /out:bin\QuizDuelKeys.exe /reference:System.Windows.Forms.dll native\QuizDuelKeys.cs
+          if (!(Test-Path bin\QuizDuelKeys.exe)) { throw "keyboard guard did not build" }
       - run: npm ci
       - run: npx electron-builder --publish never
         env:

@@ -5,6 +5,9 @@ const { execFile } = require("child_process");
 // level 1 = music apps, level 2 = also other browsers; games = also games and game launchers.
 // Remote-control apps are always closed during a quiz.
 const LISTS = {
+  // High security only: tools for ending other programs (Task Manager and similar)
+  system: { win: ["Taskmgr.exe", "resmon.exe", "perfmon.exe", "procexp.exe", "procexp64.exe", "ProcessHacker.exe", "SystemInformer.exe", "mmc.exe"],
+    mac: ["Activity Monitor", "Terminal"] },
   remote: { win: ["TeamViewer.exe", "AnyDesk.exe", "RustDesk.exe", "Supremo.exe", "vncviewer.exe", "chromoting.exe"], mac: ["TeamViewer", "AnyDesk", "RustDesk", "VNC Viewer"] },
   music: {
     win: ["Spotify.exe", "iTunes.exe", "AppleMusic.exe", "vlc.exe", "wmplayer.exe", "Microsoft.Media.Player.exe", "Discord.exe", "foobar2000.exe", "AIMP.exe", "Deezer.exe", "TIDAL.exe", "Amazon Music.exe"],
@@ -26,7 +29,8 @@ const LISTS = {
     mac: ["Google Chrome", "Safari", "firefox", "Microsoft Edge", "Brave Browser", "Opera", "Arc", "Vivaldi"],
   },
 };
-const NICE = { "chrome.exe": "Google Chrome", "msedge.exe": "Microsoft Edge", "firefox": "Firefox", "firefox.exe": "Firefox", "vlc.exe": "VLC", "wmplayer.exe": "Windows Media Player",
+const NICE = { "Taskmgr.exe": "Task Manager", "resmon.exe": "Resource Monitor", "perfmon.exe": "Performance Monitor", "mmc.exe": "Windows management console",
+  "procexp.exe": "Process Explorer", "procexp64.exe": "Process Explorer", "chrome.exe": "Google Chrome", "msedge.exe": "Microsoft Edge", "firefox": "Firefox", "firefox.exe": "Firefox", "vlc.exe": "VLC", "wmplayer.exe": "Windows Media Player",
   "Microsoft.Media.Player.exe": "Media Player", "RobloxPlayerBeta.exe": "Roblox", "RobloxPlayer": "Roblox", "Windows10Universal.exe": "Roblox",
   "Minecraft.Windows.exe": "Minecraft", "MinecraftLauncher.exe": "Minecraft", "javaw.exe": "Minecraft (Java)", "java": "Minecraft (Java)", "steam.exe": "Steam", "steam_osx": "Steam",
   "EpicGamesLauncher.exe": "Epic Games", "FortniteClient-Win64-Shipping.exe": "Fortnite", "FortniteLauncher.exe": "Fortnite", "RiotClientServices.exe": "Riot Client",
@@ -35,12 +39,13 @@ const NICE = { "chrome.exe": "Google Chrome", "msedge.exe": "Microsoft Edge", "f
   "EADesktop.exe": "EA app", "upc.exe": "Ubisoft Connect", "GalaxyClient.exe": "GOG Galaxy", "Palworld-Win64-Shipping.exe": "Palworld", "eldenring.exe": "Elden Ring", "dota2.exe": "Dota 2", "AppleMusic.exe": "Apple Music", "Music": "Apple Music", "brave.exe": "Brave", "Brave Browser": "Brave" };
 const nice = (n) => NICE[n] || n.replace(/\.exe$/i, "");
 
-function wanted(level, games) {
+function wanted(level, games, strict) {
   const os = process.platform === "win32" ? "win" : "mac";
   const names = [...LISTS.remote[os]];
   if (level >= 1) names.push(...LISTS.music[os]);
   if (level >= 2) names.push(...LISTS.browsers[os]);
   if (games) names.push(...LISTS.games[os]);
+  if (strict) names.push(...LISTS.system[os]);
   return new Set(names.map((n) => n.toLowerCase()));
 }
 
@@ -71,8 +76,8 @@ function running() {
   });
 }
 
-async function find(level, games) {
-  const want = wanted(level, games), list = await running(), out = new Map();
+async function find(level, games, strict) {
+  const want = wanted(level, games, strict), list = await running(), out = new Map();
   for (const p of list) if (want.has(p.name.toLowerCase()) && p.pid !== process.pid) {
     const key = nice(p.name);
     if (!out.has(key)) out.set(key, []);
@@ -81,8 +86,8 @@ async function find(level, games) {
   return [...out.entries()].map(([name, pids]) => ({ name, pids }));
 }
 
-async function close(level, games) {
-  const found = await find(level, games);
+async function close(level, games, strict) {
+  const found = await find(level, games, strict);
   for (const app of found) for (const pid of app.pids) { try { process.kill(pid); } catch (e) { /* gone already or not allowed */ } }
   return found.map((a) => a.name);
 }

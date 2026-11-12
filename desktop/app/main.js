@@ -17,7 +17,7 @@ if (process.env.QUIZDUEL_EXTRA_ORIGINS) process.env.QUIZDUEL_EXTRA_ORIGINS.split
 let refOrigins = new Set();
 const PROTOCOL = "quizduel";
 
-let win = null, locked = false, quitting = false, appLevel = 0, appGames = false, watcher = null, clipTimer = null, pendingLink = null;
+let win = null, locked = false, quitting = false, appLevel = 0, appGames = false, appStrict = false, watcher = null, clipTimer = null, pendingLink = null;
 
 // ---------------------------------------------------------------- links like quizduel://join?code=ABC123
 function linkToUrl(link) {
@@ -144,13 +144,14 @@ const send = (type, data) => { if (win && !win.isDestroyed()) win.webContents.se
 // ---------------------------------------------------------------- lock: watch other programs, screens and the clipboard
 async function sweep() {
   if (!locked) return;
-  const closed = await apps.close(appLevel, appGames);
-  if (closed.length) send("apps-closed", closed);
+  const closed = await apps.close(appLevel, appGames, appStrict);
+  if (closed.length) { send("apps-closed", closed); goFull(); if (win) win.focus(); }
 }
 function setLocked(on, opts) {
   locked = !!on;
   appLevel = Math.max(0, Math.min(2, +(opts && opts.level) || 0));
   appGames = !!(opts && opts.games);
+  appStrict = locked && !(opts && opts.strict === false);      // High security: Task Manager etc. are closed too
   clearInterval(watcher); clearInterval(clipTimer);
   // the Windows settings (Ctrl+Alt+Del menu, touchpad swipes) are for High security only
   if (locked && !(opts && opts.strict === false)) {
@@ -159,7 +160,7 @@ function setLocked(on, opts) {
   coverOtherScreens();
   if (locked) {
     clipboard.clear();
-    watcher = setInterval(sweep, 4000);
+    watcher = setInterval(sweep, appStrict ? 1500 : 4000);   // High: Task Manager is closed within about a second
     clipTimer = setInterval(() => clipboard.clear(), 3000);
     send("displays", screen.getAllDisplays().length);
   }

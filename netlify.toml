@@ -1,10 +1,10 @@
 # Quiz Duel on Netlify: builds the site from src/.
-# In Netlify > Site configuration > Environment variables, add:
-#   GEMINI_API_KEY    your Google Gemini API key (never put it in the code)
-#   TEACHER_PASSWORD  the teacher password (teacher12345), so only teachers can use the AI
 [build]
   command = "python3 build.py"
   publish = "site"
+  # Only rebuild the website when the website's files changed (app-only changes don't use Netlify build credits).
+  # Netlify skips the build when this command succeeds (= nothing in these files changed).
+  ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- src/ build.py netlify.toml"
 
 [[headers]]
   for = "/*"

@@ -1,6 +1,6 @@
 "use strict";
 // Quiz Duel: a locked-down window that only shows the Quiz Duel website.
-const { app, BrowserWindow, ipcMain, session, screen, clipboard, Menu, dialog, shell, globalShortcut } = require("electron");
+const { app, BrowserWindow, ipcMain, session, screen, clipboard, Menu, dialog, shell, globalShortcut, powerMonitor } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const apps = require("./apps");
@@ -32,7 +32,7 @@ function linkToUrl(link) {
     if (name) u.searchParams.set("name", name);
     if (email) u.searchParams.set("email", email);
     // focus sessions: quizduel://focus?focus=CODE (teacher's rules) or ?mine=25-5-4-3-60-G (own times)
-    const focus = (l.searchParams.get("focus") || "").toUpperCase().replace(/[^0-9A-Z-]/g, "").slice(0, 30);
+    const focus = (l.searchParams.get("focus") || "").toUpperCase().replace(/[^0-9A-Z-]/g, "").slice(0, 40);
     const mine = (l.searchParams.get("mine") || "").toUpperCase().replace(/[^0-9G-]/g, "").slice(0, 30);
     if (focus) u.searchParams.set("focus", focus);
     if (mine) u.searchParams.set("mine", mine);
@@ -81,6 +81,8 @@ function createWindow(startUrl) {
   wc.on("before-input-event", (e, input) => {
     const k = (input.key || "").toLowerCase(), mod = input.control || input.meta;
     if (input.type === "keyDown") emergencyKey(k);
+    // during a locked quiz: no copy, cut or paste at all (the page also blocks it)
+    if (locked && ((mod && ["c", "x", "v", "insert"].includes(k)) || (input.shift && (k === "insert" || k === "delete")))) { e.preventDefault(); return; }
     if (k === "f5" || k === "f12" || k === "f11" || k === "f1" ||
         (mod && !input.shift && ["r", "w", "n", "t", "p", "s", "o", "q", "h", "m", "j", "l", "d", "f", "g"].includes(k)) || (mod && input.shift && ["n", "t", "w", "q"].includes(k)) ||
         (mod && input.shift && ["i", "c", "j", "delete"].includes(k)) || (input.alt && k === "f4") || (input.alt && (k === "arrowleft" || k === "arrowright"))) e.preventDefault();
@@ -151,7 +153,10 @@ function setLocked(on, opts) {
   appGames = !!(opts && opts.games);
   clearInterval(watcher); clearInterval(clipTimer);
   // the Windows settings (Ctrl+Alt+Del menu, touchpad swipes) are for High security only
-  if (locked && !(opts && opts.strict === false)) winlock.lock(); else winlock.unlock();
+  if (locked && !(opts && opts.strict === false)) {
+    winlock.lock().then((failed) => { if (failed && failed.length) send("lockdown-weak", failed); }, () => {});
+  } else winlock.unlock();
+  coverOtherScreens();
   if (locked) {
     clipboard.clear();
     watcher = setInterval(sweep, 4000);
@@ -160,10 +165,34 @@ function setLocked(on, opts) {
   }
 }
 
+// ---------------------------------------------------------------- other screens go black during a locked quiz
+// If a monitor is plugged in mid-quiz, the quiz freezes (the page reports it) and the extra screen shows nothing usable.
+let covers = [];
+function coverOtherScreens() {
+  covers.forEach((c) => { try { c.destroy(); } catch (e) {} });
+  covers = [];
+  if (!locked || !win || win.isDestroyed()) return;
+  const mine = screen.getDisplayMatching(win.getBounds()).id;
+  for (const d of screen.getAllDisplays()) {
+    if (d.id === mine) continue;
+    const c = new BrowserWindow({ x: d.bounds.x, y: d.bounds.y, width: d.bounds.width, height: d.bounds.height, frame: false, show: false,
+      backgroundColor: "#000000", alwaysOnTop: true, skipTaskbar: true, focusable: true, kiosk: true, fullscreen: true, resizable: false,
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, devTools: false, javascript: false } });
+    c.setAlwaysOnTop(true, "screen-saver"); c.setContentProtection(true);
+    c.loadURL("data:text/html;charset=utf-8," + encodeURIComponent('<body style="margin:0;background:#000;color:#666;font:20px Segoe UI,sans-serif;display:grid;place-items:center;height:100vh">Quiz Duel: this screen is off during the quiz.</body>'));
+    c.once("ready-to-show", () => { c.show(); if (win) win.focus(); });
+    c.on("focus", () => { if (win && !win.isDestroyed()) win.focus(); });           // clicks on the black screen go back to the quiz
+    c.on("close", (e) => { if (locked && !quitting) e.preventDefault(); });
+    covers.push(c);
+  }
+}
+
 // ---------------------------------------------------------------- messages from the quiz page
 function fromSite(e) {
   try { return new URL(e.senderFrame.url).origin === SITE.origin; } catch (er) { return false; }
 }
+const RELAUNCHED = process.argv.includes("--qd-relaunched");
+ipcMain.on("qd:relaunched", (e) => { e.returnValue = RELAUNCHED; });
 ipcMain.handle("qd:info", (e) => ({ version: app.getVersion(), platform: process.platform, displays: screen.getAllDisplays().length }));
 ipcMain.handle("qd:lock", (e, on, opts) => { if (fromSite(e)) setLocked(on, opts); return locked; });
 ipcMain.handle("qd:apps", async (e, level, games) => fromSite(e) ? (await apps.find(+level || 0, !!games)).map((a) => a.name) : []);
@@ -205,8 +234,16 @@ else {
     ses.setPermissionRequestHandler((wc, permission, cb) => cb(permission === "clipboard-sanitized-write" || permission === "fullscreen"));
     ses.webRequest.onBeforeRequest((details, cb) => cb({ cancel: !allowedUrl(details.url) }));
     ses.on("will-download", (e) => e.preventDefault());
-    screen.on("display-added", () => { send("displays", screen.getAllDisplays().length); goFull(); });
-    screen.on("display-removed", () => { send("displays", screen.getAllDisplays().length); goFull(); });
+    screen.on("display-added", () => { send("displays", screen.getAllDisplays().length); goFull(); setTimeout(coverOtherScreens, 500); });
+    screen.on("display-removed", () => { send("displays", screen.getAllDisplays().length); goFull(); setTimeout(coverOtherScreens, 500); });
+    // sleep, lid closed, screen locked (Windows+L): the page freezes the quiz and tells the teacher
+    let awayAt = 0;
+    const away = (kind) => { if (!awayAt) awayAt = Date.now(); send(kind, { secs: 0 }); };
+    const back = (kind) => { const secs = awayAt ? Math.round((Date.now() - awayAt) / 1000) : 0; awayAt = 0; send(kind, { secs }); goFull(); };
+    powerMonitor.on("suspend", () => away("sleep"));
+    powerMonitor.on("resume", () => back("sleep"));
+    powerMonitor.on("lock-screen", () => away("lockscreen"));
+    powerMonitor.on("unlock-screen", () => back("lockscreen"));
     screen.on("display-metrics-changed", () => goFull());
     createWindow(linkToUrl(pendingLink || linkFromArgv(process.argv) || ""));
   });

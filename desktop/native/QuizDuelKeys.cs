@@ -2,7 +2,7 @@
 // Runs while the Quiz Duel app is open, started by the app.
 // It does NOT record or send any keys. It only stops shortcuts that leave the quiz:
 // the Windows key (Start menu, Win+Tab, Win+Ctrl+arrows, Win+D...), Alt+Tab, Alt+Esc, Ctrl+Esc and Print Screen.
-// It closes itself when Quiz Duel closes.
+// It closes itself when Quiz Duel closes. If Quiz Duel is ended during a locked High-security quiz, it opens it again.
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -39,9 +39,19 @@ static class QuizDuelKeys {
   [STAThread]
   static void Main(string[] args) {
     int parent; if (args.Length < 1 || !int.TryParse(args[0], out parent)) return;
+    string flag = args.Length > 1 ? args[1] : "";      // exists only while a High-security quiz is locked
+    string app = args.Length > 2 ? args[2] : "";       // Quiz Duel itself
     keep = Cb; hook = SetWindowsHookEx(13, keep, GetModuleHandle(null), 0);
-    Timer t = new Timer(); t.Interval = 1000;
-    t.Tick += delegate { bool gone; try { gone = Process.GetProcessById(parent).HasExited; } catch { gone = true; } if (gone) Application.Exit(); };
+    Timer t = new Timer(); t.Interval = 500;
+    t.Tick += delegate {
+      bool gone; try { gone = Process.GetProcessById(parent).HasExited; } catch { gone = true; }
+      if (!gone) return;
+      t.Stop();
+      // Quiz Duel was ended during a locked quiz (e.g. in Task Manager): open it again; the quiz comes back frozen
+      // and the teacher is told. A normal close removes the flag file first, so this doesn't happen then.
+      try { if (flag.Length > 0 && app.Length > 0 && System.IO.File.Exists(flag)) Process.Start(app, "--qd-relaunched"); } catch { }
+      Application.Exit();
+    };
     t.Start(); Application.Run();
     if (hook != IntPtr.Zero) UnhookWindowsHookEx(hook);
   }

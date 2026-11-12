@@ -2,7 +2,8 @@
 /* Quiz Duel focus sounds. Everything is made by the browser (no audio files, no lyrics, nothing to download):
    simple piano versions of Mozart pieces, noise and nature sounds, and instrumental beats. */
 (function () {
-  const GROUPS = [["mozart", "Mozart (piano)"], ["noise", "Noise and nature"], ["upbeat", "Upbeat (no lyrics)"], ["calm", "Calm"]];
+  const GROUPS = [["mozart", "Mozart (piano)"], ["noise", "Noise and nature"], ["upbeat", "Upbeat (no lyrics)"], ["calm", "Calm"],
+    ["jazzhop", "Coffee shop jazz-hop"], ["school", "Back to school (chill beats)"]];
   const SOUNDS = [
     { id: "moz-mix", group: "mozart", name: "Mozart: piano mix" },
     { id: "moz-545", group: "mozart", name: "Mozart: Sonata in C (opening)" },
@@ -19,6 +20,16 @@
     { id: "lofi", group: "calm", name: "Calm: Lo-fi beat" },
     { id: "pads", group: "calm", name: "Calm: Soft pads" },
     { id: "bells", group: "calm", name: "Calm: Bells" },
+    { id: "jh-latte", group: "jazzhop", name: "Jazz-hop: Late latte" },
+    { id: "jh-window", group: "jazzhop", name: "Jazz-hop: Rainy window seat" },
+    { id: "jh-vinyl", group: "jazzhop", name: "Jazz-hop: Warm vinyl" },
+    { id: "jh-sketch", group: "jazzhop", name: "Jazz-hop: Sketchbook" },
+    { id: "jh-moon", group: "jazzhop", name: "Jazz-hop: Moon cafe" },
+    { id: "bs-locker", group: "school", name: "Back to school: Locker room" },
+    { id: "bs-bus", group: "school", name: "Back to school: Morning bus" },
+    { id: "bs-recess", group: "school", name: "Back to school: Recess" },
+    { id: "bs-library", group: "school", name: "Back to school: Library hour" },
+    { id: "bs-lastbell", group: "school", name: "Back to school: Last bell" },
   ];
 
   // ---------------------------------------------------------------- notes
@@ -70,7 +81,11 @@
 
   // ---------------------------------------------------------------- instrumental beats (written by rule, same every time)
   function rng(seed) { let s = seed; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
-  const CH = { C: [48, 52, 55], G: [43, 47, 50], Am: [45, 48, 52], F: [41, 45, 48], Dm: [50, 53, 57], Em: [52, 55, 59], D: [50, 54, 57], Bm: [47, 50, 54] };
+  const CH = { C: [48, 52, 55], G: [43, 47, 50], Am: [45, 48, 52], F: [41, 45, 48], Dm: [50, 53, 57], Em: [52, 55, 59], D: [50, 54, 57], Bm: [47, 50, 54],
+    // seventh chords for the jazz-hop tracks (root first: the bass plays the first note)
+    Cmaj7: [48, 52, 55, 59], Am7: [45, 48, 52, 55], Dm7: [50, 53, 57, 60], G7: [43, 47, 50, 53], Fmaj7: [41, 45, 48, 52], Em7: [40, 43, 47, 50],
+    Ebmaj7: [39, 43, 46, 50], Bbmaj7: [46, 50, 53, 57], Gm7: [43, 46, 50, 53], C7: [48, 52, 55, 58], Bm7b5: [47, 50, 53, 57], E7: [40, 44, 47, 50],
+    Abmaj7: [44, 48, 51, 55], Db7: [49, 53, 56, 59] };
   function beat(o) {
     const spb = 60 / o.bpm, ev = [], rand = rng(o.seed), bars = o.chords.length * o.rounds;
     const scale = o.scale;
@@ -93,6 +108,7 @@
     }
     return { ev, len: bars * 4 * spb };
   }
+  const DOR_D = [74, 76, 77, 79, 81, 83, 84, 86], MAJ_F = [72, 74, 76, 77, 79, 81, 84], BLUE_C = [72, 75, 77, 78, 79, 82, 84];
   const PENT_C = [72, 74, 76, 79, 81, 84, 86, 88], PENT_D = [74, 76, 78, 81, 83, 86, 88, 90], PENT_AM = [69, 72, 74, 76, 79, 81, 84];
   const SONGS = {
     "moz-545": K545, "moz-265": K265, "moz-turk": TURK, "moz-nacht": NACHT,
@@ -103,11 +119,24 @@
     lofi: () => beat({ bpm: 76, seed: 11, chords: ["Dm", "G", "C", "Am"], rounds: 4, scale: PENT_C, kick: 1, snare: 1, hat: 1, swing: 1, drum: 0.3, bass: 1, busy: 0.2, pad: "epiano", padGain: 0.16, lead: "epiano", melody: 0.18, leadGain: 0.22 }),
     pads: () => beat({ bpm: 40, seed: 5, chords: ["C", "Am", "F", "G"], rounds: 2, scale: PENT_C, pad: "pad", padGain: 0.11, lead: "bell", melody: 0.07, leadGain: 0.16 }),
     bells: () => beat({ bpm: 54, seed: 9, chords: ["C", "Em", "F", "C"], rounds: 3, scale: PENT_C, pad: "pad", padGain: 0.04, lead: "bell", melody: 0.4, leadGain: 0.3 }),
+    // coffee shop jazz-hop: slow swung drums, seventh chords on electric piano, soft melody
+    "jh-latte": () => beat({ bpm: 82, seed: 31, chords: ["Dm7", "G7", "Cmaj7", "Am7"], rounds: 12, scale: DOR_D, kick: 1, snare: 1, hat: 1, swing: 1, drum: 0.28, bass: 1, busy: 0.3, pad: "epiano", padGain: 0.13, lead: "epiano", melody: 0.22, leadGain: 0.24 }),
+    "jh-window": () => beat({ bpm: 74, seed: 44, chords: ["Fmaj7", "Em7", "Dm7", "Cmaj7"], rounds: 12, scale: MAJ_F, kick: 1, snare: 1, hat: 1, swing: 1, drum: 0.24, bass: 1, busy: 0.2, pad: "epiano", padGain: 0.14, lead: "bell", melody: 0.14, leadGain: 0.18 }),
+    "jh-vinyl": () => beat({ bpm: 88, seed: 52, chords: ["Am7", "Dm7", "G7", "Cmaj7", "Fmaj7", "Bm7b5", "E7", "Am7"], rounds: 6, scale: PENT_AM, kick: 1, snare: 1, hat: 1, swing: 1, drum: 0.3, bass: 1, busy: 0.45, pad: "epiano", padGain: 0.12, lead: "piano", melody: 0.2, leadGain: 0.3 }),
+    "jh-sketch": () => beat({ bpm: 70, seed: 67, chords: ["Ebmaj7", "Dm7", "Gm7", "C7"], rounds: 12, scale: BLUE_C, kick: 1, snare: 1, hat: 1, swing: 1, drum: 0.25, bass: 1, busy: 0.25, pad: "epiano", padGain: 0.14, lead: "epiano", melody: 0.18, leadGain: 0.22 }),
+    "jh-moon": () => beat({ bpm: 78, seed: 73, chords: ["Cmaj7", "Abmaj7", "Fmaj7", "Db7"], rounds: 10, scale: PENT_C, kick: 1, snare: 1, hat: 1, swing: 1, drum: 0.26, bass: 1, busy: 0.3, pad: "pad", padGain: 0.06, lead: "epiano", melody: 0.2, leadGain: 0.24 }),
+    // back to school: brighter chill beats, a bit faster, friendly melodies
+    "bs-locker": () => beat({ bpm: 94, seed: 81, chords: ["C", "G", "Am", "F"], rounds: 12, scale: PENT_C, kick: 1, snare: 1, hat: 1, swing: 1, drum: 0.32, bass: 1, busy: 0.4, pad: "epiano", padGain: 0.12, lead: "piano", melody: 0.3, leadGain: 0.32 }),
+    "bs-bus": () => beat({ bpm: 100, seed: 88, chords: ["D", "Bm", "G", "D"], rounds: 12, scale: PENT_D, kick: 1, snare: 1, hat: 1, drum: 0.3, bass: 1, busy: 0.5, arp: "bell", arpEvery: 4, arpGain: 0.08, lead: "piano", melody: 0.3, leadGain: 0.3 }),
+    "bs-recess": () => beat({ bpm: 108, seed: 95, chords: ["F", "C", "Dm", "G"], rounds: 12, scale: PENT_C, kick: 1, snare: 1, hat: 1, swing: 1, drum: 0.34, bass: 1, busy: 0.6, pad: "epiano", padGain: 0.1, lead: "bell", melody: 0.3, leadGain: 0.2 }),
+    "bs-library": () => beat({ bpm: 72, seed: 101, chords: ["Am", "F", "C", "G"], rounds: 10, scale: PENT_AM, kick: 1, snare: 1, hat: 1, swing: 1, drum: 0.2, bass: 1, busy: 0.2, pad: "pad", padGain: 0.07, lead: "epiano", melody: 0.18, leadGain: 0.24 }),
+    "bs-lastbell": () => beat({ bpm: 96, seed: 117, chords: ["G", "D", "Em", "C"], rounds: 12, scale: [67, 69, 71, 74, 76, 79, 81, 83], kick: 1, snare: 1, hat: 1, swing: 1, drum: 0.3, bass: 1, busy: 0.45, pad: "epiano", padGain: 0.12, lead: "piano", melody: 0.28, leadGain: 0.3 }),
   };
 
   // ---------------------------------------------------------------- sound engine
   let ctx = null, master = null, noiseBuf = null, playing = null, timer = null, live = [], volume = 0.5;
   let song = null, ptr = 0, loopAt = 0;
+  let list = null, listAt = 0, listTimer = null;   // playlist: every allowed track once, in order, then again
   function ensure() {
     if (ctx) return true;
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -154,7 +183,10 @@
     if (!song) return;
     const horizon = ctx.currentTime + 0.35;
     for (let guard = 0; guard < 400; guard++) {
-      if (ptr >= song.ev.length) { ptr = 0; loopAt += song.len; }
+      if (ptr >= song.ev.length) {
+        if (list) { const nextAt = loopAt + song.len + 1.2; setTimeout(() => { if (list) nextInList(nextAt); }, Math.max(0, (nextAt - ctx.currentTime - 0.3) * 1000)); song = null; return; }
+        ptr = 0; loopAt += song.len;
+      }
       const e = song.ev[ptr], t = loopAt + e.t;
       if (t > horizon) break;
       if (t > ctx.currentTime - 0.05) INST[e.inst](e, Math.max(t, ctx.currentTime));
@@ -182,8 +214,10 @@
       s2.connect(f2); f2.connect(g2); g2.connect(master); s2.start(0, 1.3); live.push(s2);
     }
   }
-  function stop() {
+  function stop(keepList) {
     clearInterval(timer); timer = null; song = null; playing = null;
+    clearTimeout(listTimer); listTimer = null;
+    if (!keepList) list = null;
     for (const n of live) { try { n.stop(); } catch (e) { /* already stopped */ } }
     live = [];
     if (ctx && master) {                                     // cut any notes already queued
@@ -193,14 +227,37 @@
       setTimeout(() => { try { old.disconnect(); } catch (e) { /* ignore */ } }, 400);
     }
   }
+  function start(id, at) {
+    if (SONGS[id]) { song = SONGS[id](); song.ev.sort((a, b) => a.t - b.t); ptr = 0; loopAt = Math.max(at || 0, ctx.currentTime + 0.12); timer = setInterval(tick, 60); tick(); }
+    else {
+      noise(id);
+      if (list) listTimer = setTimeout(() => { if (list) nextInList(0); }, 150000);      // noise tracks play 2.5 minutes in a playlist
+    }
+    playing = id;
+  }
   function play(id) {
     if (!ensure()) return false;
     stop();
     if (ctx.state === "suspended") ctx.resume();
-    if (SONGS[id]) { song = SONGS[id](); song.ev.sort((a, b) => a.t - b.t); ptr = 0; loopAt = ctx.currentTime + 0.12; timer = setInterval(tick, 60); tick(); }
-    else noise(id);
-    playing = id;
+    start(id);
     return true;
+  }
+  // play a list of tracks one after another, then start again from the top (forever, until stopped)
+  function playList(ids) {
+    ids = (ids || []).filter((id) => SOUNDS.some((x) => x.id === id));
+    if (!ids.length || !ensure()) return false;
+    stop();
+    if (ctx.state === "suspended") ctx.resume();
+    list = ids; listAt = 0;
+    start(list[0]);
+    return true;
+  }
+  function nextInList(at) {
+    if (!list) return;
+    const keep = list;
+    stop(true); list = keep;
+    listAt = (listAt + 1) % list.length;
+    start(list[listAt], at);
   }
   function setVolume(v) { volume = Math.max(0, Math.min(1, v)); if (master) master.gain.setTargetAtTime(volume * volume, ctx.currentTime, 0.05); }
 
@@ -216,5 +273,6 @@
     });
   }
 
-  MathDuel.Music = { GROUPS, SOUNDS, SONGS, play, stop, setVolume, chime, playing: () => playing, volume: () => volume };
+  MathDuel.Music = { GROUPS, SOUNDS, SONGS, play, playList, stop: () => stop(), setVolume, chime, playing: () => playing,
+    inList: () => !!list, current: () => (list ? list[listAt] : playing), volume: () => volume };
 })();

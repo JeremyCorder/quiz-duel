@@ -149,6 +149,26 @@
     draw();
     return [btn, panel];
   }
+  // the student's status chip next to "Quiz Duel": clock, battery (when the device tells us), and the code they used
+  let batteryInfo = null;
+  try { if (navigator.getBattery) navigator.getBattery().then((b) => { batteryInfo = b; }, () => {}); } catch (e) {}
+  function statusChip(code) {
+    const clock = h("span", { class: "st-clock" }), batt = h("span", { class: "st-batt" });
+    const paint = () => {
+      clock.textContent = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      if (batteryInfo) {
+        const pct = Math.round(batteryInfo.level * 100);
+        batt.textContent = (batteryInfo.charging ? "\u26a1" : "\ud83d\udd0b") + " " + pct + "%";
+        batt.classList.toggle("low", pct <= 15 && !batteryInfo.charging);
+        batt.title = batteryInfo.charging ? "Charging" : "Battery";
+        batt.hidden = false;
+      } else batt.hidden = true;
+    };
+    paint();
+    const id = setInterval(() => { if (!chip.isConnected) { clearInterval(id); return; } paint(); }, 10000);
+    const chip = h("span", { class: "status-chip", "aria-label": "Time, battery and code" }, clock, batt, code ? h("span", { class: "st-code mono", title: "The code you joined with" }, code) : null);
+    return chip;
+  }
   function topbar(left, right, extra) {
     return h("header", { class: "topbar" }, h("div", { class: "brand" }, h("span", { class: "logo" }, "Q"), left), extra || null,
       h("div", { class: "spacer" }), right ? h("div", { class: "top-right" }, right) : null, displayMenu());
@@ -1226,15 +1246,36 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
   const focusCheck = (body) => cyrb53("qd-focus:" + body).slice(-3).toUpperCase();
   // The code also carries a scrambled copy of the teacher's end code, so only the teacher can stop a session early.
   const focusPinHash = (pin, body) => cyrb53(`qd-focus-pin:${pin}:${body}`).slice(-4).toUpperCase();
-  // -G at the end means anti-game (the session runs in the Quiz Duel app, games closed)
-  function focusCode(r) { const body = FOCUS_KEYS.map((k) => r[k]).join("-") + "-" + focusPinHash(r.pin, FOCUS_KEYS.map((k) => r[k]).join("-")) + (r.games ? "-G" : ""); return body + "-" + focusCheck(body); }
+  // After the end-code part, optional extras (all covered by the check letters, so they can't be removed):
+  //   -G / -M / -H / -GM / -GH   anti-game, Medium or High security (none = Low)
+  //   -Sxx                        which focus music the teacher allows (a bit for each kind of music; S00 = none)
+  const FOCUS_ALL_MUSIC = () => (1 << M.Music.GROUPS.length) - 1;
+  function focusMusicBits(groups) { return M.Music.GROUPS.reduce((b, [g], i) => b | ((groups || []).includes(g) ? 1 << i : 0), 0); }
+  function focusMusicGroups(bits) { return M.Music.GROUPS.filter((_, i) => bits & (1 << i)).map(([g]) => g); }
+  function focusCode(r) {
+    const nums = FOCUS_KEYS.map((k) => r[k]).join("-");
+    const flags = (r.games ? "G" : "") + (r.sec === "high" ? "H" : r.sec === "medium" ? "M" : "");
+    const bits = Array.isArray(r.music) ? focusMusicBits(r.music) : FOCUS_ALL_MUSIC();
+    const body = nums + "-" + focusPinHash(r.pin, nums) + (flags ? "-" + flags : "") + (bits !== FOCUS_ALL_MUSIC() ? "-S" + bits.toString(16).toUpperCase().padStart(2, "0") : "");
+    return body + "-" + focusCheck(body);
+  }
   function focusParse(text) {
-    const m = /^(\d{1,3})-(\d{1,2})-(\d{1,2})-(\d{1,2})-(\d{2,3})-([0-9A-F]{4})(-G)?-([0-9A-F]{3})$/.exec(String(text || "").toUpperCase().replace(/[^0-9A-Z-]/g, ""));
-    if (!m || focusCheck(m.slice(1, 7).join("-") + (m[7] || "")) !== m[8]) return null;
+    const m = /^(\d{1,3})-(\d{1,2})-(\d{1,2})-(\d{1,2})-(\d{2,3})-([0-9A-F]{4})(?:-(G?[MH]?))?(?:-S([0-9A-F]{2}))?-([0-9A-F]{3})$/.exec(String(text || "").toUpperCase().replace(/[^0-9A-Z-]/g, ""));
+    if (!m) return null;
+    const body = m.slice(1, 7).join("-") + (m[7] ? "-" + m[7] : "") + (m[8] ? "-S" + m[8] : "");
+    if (focusCheck(body) !== m[9]) return null;
     const r = {}; FOCUS_KEYS.forEach((k, i) => { r[k] = +m[i + 1]; });
-    r.pinHash = m[6]; r.body = m.slice(1, 6).join("-"); r.games = !!m[7];
+    r.pinHash = m[6]; r.body = m.slice(1, 6).join("-");
+    const flags = m[7] || "";
+    r.games = flags.includes("G"); r.sec = flags.includes("H") ? "high" : flags.includes("M") ? "medium" : "low";
+    r.music = focusMusicGroups(m[8] ? parseInt(m[8], 16) : FOCUS_ALL_MUSIC());
     return FOCUS_KEYS.every((k) => r[k] >= FOCUS_LIMITS[k][0] && r[k] <= FOCUS_LIMITS[k][1]) ? r : null;
   }
+  const FOCUS_SEC_HELP = {
+    low: "Leaving the session page is counted and shown at the end.",
+    medium: "Full screen. Leaving covers the timer with a warning until the student comes back, and it's counted.",
+    high: "Runs in the Quiz Duel app with the computer locked like a High quiz: other apps and websites blocked, music apps closed.",
+  };
   function focusFields(r, onchange, disabled) {
     const labels = { focus: "Focus time (minutes)", brk: "Break (minutes)", rounds: "Focus rounds, then it stops", pauses: "Pauses allowed", pauseSecs: "Longest pause (seconds)" };
     const inputs = {};
@@ -1249,6 +1290,9 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
   function focusTeacher() {
     const r = Object.assign({}, FOCUS_DEFAULT, store.get("qd-focus-teacher") || {});
     if (!/^\d{6}$/.test(r.pin || "")) r.pin = randomCode(6, "0123456789");
+    if (!["low", "medium", "high"].includes(r.sec)) r.sec = "low";
+    if (!Array.isArray(r.music)) r.music = M.Music.GROUPS.map(([g]) => g);
+    const secHelp = h("p", { class: "hint" }, FOCUS_SEC_HELP[r.sec]);
     const pinIn = h("input", { class: "input tiny mono", inputmode: "numeric", maxlength: 6, value: r.pin, "aria-label": "Teacher end code", onchange: (e) => { const v = e.target.value.replace(/\D/g, ""); if (v.length === 6) r.pin = v; e.target.value = r.pin; paint(); } });
     const codeEl = h("p", { class: "bigcode focus-code" }), linkEl = h("p", { class: "mono small focus-link" }), msg = h("span", { class: "muted small" });
     const paint = () => { store.set("qd-focus-teacher", r); codeEl.textContent = focusCode(r); linkEl.textContent = `${BASE_URL}?focus=${focusCode(r)}`; msg.textContent = ""; };
@@ -1260,9 +1304,17 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         fields.el,
         h("div", { class: "check wrapline" }, h("b", {}, "Teacher end code"), pinIn, h("span", { class: "muted" }, "6 digits. Keep it secret.")),
         h("p", { class: "hint" }, "Students on your rules can't end the session themselves. It stops after the last round, or when you type this code on their screen."),
+        h("label", { class: "field" }, h("span", {}, "Security"),
+          h("select", { class: "input", "aria-label": "Focus security", onchange: (e) => { r.sec = e.target.value; secHelp.textContent = FOCUS_SEC_HELP[r.sec]; paint(); } },
+            ["low", "medium", "high"].map((v) => h("option", { value: v, selected: (r.sec || "low") === v }, SECURITY[v])))),
+        secHelp,
         h("label", { class: "check" }, h("input", { type: "checkbox", checked: !!r.games, "aria-label": "Focus anti-game", onchange: (e) => { r.games = e.target.checked; paint(); } }),
           " ", h("b", {}, "Anti-game"), ": students can't open games or game websites during the session"),
-        h("p", { class: "hint" }, "With anti-game on, the session runs in the Quiz Duel app (a website can't block games). The app blocks every website and closes games like Roblox, Minecraft and Fortnite until the session ends.")),
+        h("p", { class: "hint" }, "With anti-game on, the session runs in the Quiz Duel app (a website can't block games). The app blocks every website and closes games like Roblox, Minecraft and Fortnite until the session ends."),
+        h("p", { class: "label" }, "Focus music students can play"),
+        h("div", { class: "checks" }, M.Music.GROUPS.map(([g, label]) => h("label", { class: "check" },
+          h("input", { type: "checkbox", checked: r.music.includes(g), "aria-label": "Music: " + label, onchange: (e) => { r.music = M.Music.GROUPS.map(([x]) => x).filter((x) => x === g ? e.target.checked : r.music.includes(x)); paint(); } }), " " + label))),
+        h("p", { class: "hint" }, "Students get one playlist of all the music you tick, playing one track after another and starting again at the end. They can also pick a single track, or turn it off.")),
       card(h("h3", {}, "Share with students"), h("p", { class: "label" }, "Focus code"), codeEl, h("p", { class: "label" }, "Or send this link"), linkEl,
         h("div", { class: "row" }, h("button", { class: "btn", onclick: () => copy(focusCode(r)) }, "Copy the code"), h("button", { class: "btn ghost", onclick: () => copy(linkEl.textContent) }, "Copy the link"), msg),
         h("div", { class: "row" }, h("button", { class: "btn ghost", onclick: () => focusSetup(focusCode(r)) }, "Try it yourself"), h("button", { class: "btn ghost", onclick: () => builder(false) }, "Back")))));
@@ -1275,7 +1327,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     let locked = false;
     const fields = focusFields(r, () => store.set("qd-focus-mine", r));
     const note = h("p", { class: "msg" });
-    const code = h("input", { id: "focus-code", class: "input mono", autocomplete: "off", maxlength: 30, placeholder: "25-5-4-3-60-ABC", value: prefill || "", oninput: () => check() });
+    const code = h("input", { id: "focus-code", class: "input mono", autocomplete: "off", maxlength: 40, placeholder: "25-5-4-3-60-ABC", value: prefill || "", oninput: () => check() });
     const goal = h("input", { id: "focus-goal", class: "input", maxlength: 80, autocomplete: "off", placeholder: "For example: math homework, pages 40-42" });
     const games = h("input", { type: "checkbox", "aria-label": "Block games", checked: !!(store.get("qd-focus-mine") || {}).games,
       onchange: (e) => { if (!locked) { r.games = e.target.checked; store.set("qd-focus-mine", r); } } });
@@ -1283,7 +1335,11 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     function check() {
       const typed = code.value.trim(), got = focusParse(typed);
       locked = !!got;
-      if (got) { fields.set(got, true); note.textContent = "Your teacher's rules are set."; note.className = "msg good"; games.checked = got.games; games.disabled = true; }
+      if (got) {
+        fields.set(got, true); games.checked = got.games; games.disabled = true; note.className = "msg good";
+        const music = got.music.length ? M.Music.GROUPS.filter(([g]) => got.music.includes(g)).map(([, l]) => l).join(", ") : "none";
+        note.textContent = `Your teacher's rules are set. Security: ${SECURITY[got.sec]}${got.games ? " + anti-game" : ""}. Music: ${music}.` + (!IN_APP && (got.games || got.sec === "high") ? " This session opens in the Quiz Duel app." : "");
+      }
       else { fields.set(Object.assign({}, FOCUS_DEFAULT, store.get("qd-focus-mine") || {}), false); note.textContent = typed ? "That focus code isn't right. Check it, or clear the box to pick your own times." : ""; note.className = "msg bad";
         games.disabled = false; games.checked = !!(store.get("qd-focus-mine") || {}).games; }
       gamesNote.textContent = IN_APP ? "" : " (opens in the Quiz Duel app)";
@@ -1292,8 +1348,9 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       if (code.value.trim() && !locked) { code.focus(); return; }
       const got = locked ? focusParse(code.value.trim()) : null;
       const cfg = { focus: r.focus * 60, brk: r.brk * 60, rounds: r.rounds, pauses: r.pauses, pauseSecs: r.pauseSecs, goal: goal.value.trim(), locked, code: locked ? code.value.trim().toUpperCase() : "",
-        pinHash: got ? got.pinHash : "", body: got ? got.body : "", games: got ? got.games : games.checked };
-      if (cfg.games && !IN_APP) { focusNeedApp(cfg); return; }
+        pinHash: got ? got.pinHash : "", body: got ? got.body : "", games: got ? got.games : games.checked,
+        sec: got ? got.sec : "low", music: got ? got.music : M.Music.GROUPS.map(([g]) => g) };
+      if ((cfg.games || cfg.sec === "high") && !IN_APP) { focusNeedApp(cfg); return; }
       focusRun(cfg);
     };
     show(topbar(APP, "Focus session"), h("main", { class: "narrow" }, card(h("h2", {}, "Focus session"),
@@ -1310,8 +1367,9 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     const mine = [cfg.focus / 60, cfg.brk / 60, cfg.rounds, cfg.pauses, cfg.pauseSecs].join("-");
     const link = "quizduel://focus?" + (cfg.locked ? "focus=" + encodeURIComponent(cfg.code) : "mine=" + mine + "-G");
     show(topbar(APP, "Focus session"), h("main", { class: "narrow" }, card(
-      h("h2", {}, "Anti-game sessions run in the Quiz Duel app"),
-      h("p", {}, "A website can't stop games, so this session runs in the Quiz Duel app. It blocks game websites and closes games like Roblox until the session ends."),
+      h("h2", {}, cfg.sec === "high" ? "This focus session runs in the Quiz Duel app" : "Anti-game sessions run in the Quiz Duel app"),
+      h("p", {}, cfg.sec === "high" ? "Your teacher set this session to High security, so it runs in the Quiz Duel app, which locks the computer until the session ends."
+        : "A website can't stop games, so this session runs in the Quiz Duel app. It blocks game websites and closes games like Roblox until the session ends."),
       h("button", { class: "btn big", onclick: () => { location.href = link; } }, "Open the Quiz Duel app"),
       h("div", { class: "notice app-help" }, h("b", {}, "The app didn't open?"),
         h("p", {}, "Open ", h("b", {}, "Quiz Duel"), " yourself, choose ", h("b", {}, "Start a focus session"), cfg.locked ? " and type this focus code:" : " and tick Anti-game."),
@@ -1329,10 +1387,18 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     if (!IN_APP && el.requestFullscreen && !document.fullscreenElement) el.requestFullscreen().catch(() => {});
     M.Music.chime(1);
     const gamesMsg = h("p", { class: "muted small", "aria-live": "polite" });
-    if (cfg.games && IN_APP) {
-      QDA.closeApps(0, true).then((closed) => { gamesMsg.textContent = "Anti-game is on" + (closed && closed.length ? `: closed ${closed.join(", ")}.` : "."); }, () => {});
-      QDA.lock(true, { level: 0, games: true, strict: false }).catch(() => {});
+    const sec = cfg.sec || "low", appLock = IN_APP && (cfg.games || sec === "high");
+    if (appLock) {
+      const level = sec === "high" ? 1 : 0;           // High also closes other music apps (our focus music still plays)
+      QDA.closeApps(level, !!cfg.games).then((closed) => {
+        gamesMsg.textContent = (cfg.games ? "Anti-game is on" : "The computer is locked for this session") + (closed && closed.length ? `: closed ${closed.join(", ")}.` : ".");
+      }, () => {});
+      QDA.lock(true, { level, games: !!cfg.games, strict: sec === "high" }).catch(() => {});
     } else if (cfg.games) gamesMsg.textContent = "Anti-game only works in the Quiz Duel app.";
+    // Medium / High: leaving covers the timer with a warning until the student comes back
+    const awayCover = h("div", { class: "focus-away", hidden: true, role: "alert" }, h("h2", {}, "You left the focus session"),
+      h("p", {}, "This counts as leaving. Come back and keep going \u2014 the timer didn't stop."),
+      h("button", { class: "btn big", type: "button", onclick: () => { awayCover.hidden = true; if (!IN_APP && el.requestFullscreen && !document.fullscreenElement) el.requestFullscreen().catch(() => {}); } }, "I'm back"));
     const phaseEl = h("p", { class: "focus-phase" }), timeEl = h("div", { class: "focus-time", role: "timer" }), fill = h("div", { class: "bar-fill focus-fill" });
     const dots = h("div", { class: "focus-dots", "aria-hidden": "true" });
     const info = h("p", { class: "muted focus-info", "aria-live": "polite" });
@@ -1398,9 +1464,10 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     }
     function finish(early) {
       if (!Focus.active) return;
+      awayCover.hidden = true;
       if (early && st.phase === "focus") st.focused += (Date.now() - st.phaseStart) / 1000;
       Focus.active = false; Focus.locked = false; Focus.onLeave = null; document.title = APP;
-      if (cfg.games && IN_APP) QDA.lock(false).catch(() => {});
+      if (appLock) QDA.lock(false).catch(() => {});
       store.del("qd-focus-run");
       MusicBar.hide();
       if (!IN_APP && document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
@@ -1417,13 +1484,17 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         h("div", { class: "row" }, h("button", { class: "btn", onclick: home }, "Done"), h("button", { class: "btn ghost", onclick: () => focusSetup() }, "Another session")))));
     }
     const box = h("section", { class: "card focus-card" }, phaseEl, cfg.goal ? h("p", { class: "focus-goal" }, cfg.goal) : null, timeEl,
-      h("div", { class: "bar" }, fill), dots, info, gamesMsg, h("div", { class: "row center" }, pauseBtn, skipBtn, fsBtn, endBtn), pinRow);
-    show(topbar(APP, cfg.locked ? "Focus session \u00b7 teacher's rules" : "Focus session"), h("main", { class: "narrow focus-main" }, box));
+      h("div", { class: "bar" }, fill), dots, info, gamesMsg, h("div", { class: "row center" }, pauseBtn, skipBtn, fsBtn, endBtn), pinRow, awayCover);
+    show(topbar([APP, statusChip(cfg.locked ? cfg.code : "Own session")], cfg.locked ? "Focus session \u00b7 teacher's rules" : "Focus session"), h("main", { class: "narrow focus-main" }, box));
     Focus.active = true; Focus.locked = !!cfg.locked; Focus.code = cfg.code || ""; Focus.end = () => finish(true);
-    Focus.onLeave = () => { const now = Date.now(); if (st.phase === "focus" && now - st.lastLeft > 3000) { st.lastLeft = now; st.left++; remember(); paint(); } };
+    Focus.onLeave = () => {
+      const now = Date.now();
+      if (st.phase === "focus" && now - st.lastLeft > 3000) { st.lastLeft = now; st.left++; remember(); paint(); }
+      if (sec !== "low" && st.phase === "focus") awayCover.hidden = false;
+    };
     if (resumed && Date.now() - st.lastLeft > 3000) { st.left++; st.lastLeft = Date.now(); }       // coming back after a reload counts as leaving the page
     remember();
-    MusicBar.show(M.Music.GROUPS.map(([g]) => g));
+    MusicBar.show(Array.isArray(cfg.music) ? cfg.music : M.Music.GROUPS.map(([g]) => g), true);
     paint();
     every(250, tick);
     Focus.repaint = paint;
@@ -1681,13 +1752,17 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         log(`${name}  question ${qn}: ${word}${shown}  (${ev.secs}s)${ev.late ? "  [sent after being offline]" : ""}`);
       } else if (t === "viol") {
         const why = ev.why;
-        if (ev.soft) { s.left++; log(`! ${name} left the quiz page (question ${ev.i}). Low security: not frozen.`); }
+        if (ev.soft) { s.left++; log(`! ${name}${{ sleep: "'s computer went to sleep", lockscreen: " locked the screen", closed: "'s app was closed, then they came back" }[why] || " left the quiz page"} (question ${ev.i}). Low security: not frozen.`); }
         else if (why === "monitor") { s.monitor++; s.frozen = "extra monitor"; log(`!! ${name} has an extra monitor (question ${ev.i}). Frozen.`); }
         else if (why === "reload") { s.reloads++; s.left++; s.frozen = "reloaded page"; log(`!! ${name} reloaded the quiz page (question ${ev.i}). Frozen.`); }
+        else if (why === "sleep") { s.left++; s.frozen = "computer slept"; log(`!! ${name}'s computer went to sleep or the lid was closed${ev.secs ? ` for about ${Math.round(ev.secs / 60) || 1} min` : ""} (question ${ev.i}). Frozen.`); }
+        else if (why === "lockscreen") { s.left++; s.frozen = "locked the screen"; log(`!! ${name} locked the computer screen (Windows+L or similar) (question ${ev.i}). Frozen.`); }
+        else if (why === "closed") { s.left++; s.frozen = "app was closed"; log(`!! ${name}'s Quiz Duel app was closed or the computer restarted, then they came back (question ${ev.i}). Frozen.`); }
         else { s.left++; s.frozen = "left the quiz"; log(`!! ${name} LEFT the quiz window (question ${ev.i}). Frozen.`); }
         if (!ev.soft) s.wants = false;
       } else if (t === "res") {
         if (ev.how === "dict") log(`${name} looked up the word "${ev.what}" (question ${ev.i}).`);
+        else if (ev.how === "weak") log(`! On ${name}'s computer Windows didn't let Quiz Duel turn off: ${String(ev.what).slice(0, 200)}. Watch this student; leaving is still caught.`);
         else if (ev.how === "grammar") log(`${name} used the grammar check (question ${ev.i}).`);
         else if (ev.how === "back") log(`${name} came back to the quiz page.`);
         else if (ev.how === "apps") log(`Quiz Duel closed ${ev.what} on ${name}'s computer.`);
@@ -2055,12 +2130,40 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     }, 700);
   });
   document.addEventListener("keydown", (e) => { if (Lock.on && e.key === "Escape") { e.preventDefault(); Q.requestLeave(); } });
+  // sleep / lid closed / screen locked: counts as leaving. In the app the computer tells us; in a browser we notice
+  // that the page's clock jumped (timers don't run while the computer sleeps).
+  function awayEvent(kind, secs) {
+    if (!Q.active) return;
+    if (Lock.on) Q.violation(kind, secs ? { secs } : null);
+    else if (S.client) S.client.send("viol", { why: kind, soft: true, secs: secs || 0 });
+  }
+  let tickAt = Date.now();
+  setInterval(() => {
+    const now = Date.now(), gap = now - tickAt; tickAt = now;
+    if (gap > 20000 && Q.active && !IN_APP) awayEvent("sleep", Math.round(gap / 1000));
+  }, 2000);
   if (QDA) QDA.on((m) => {
     if (!m) return;
     if (m.type === "displays") { appDisplays = +m.data || 1; if (Lock.on && appDisplays > 1 && !(Q.overlay && Q.overlay.why === "monitor")) Q.violation("monitor"); }
     else if (m.type === "left" && Lock.on && Date.now() > Lock.grace) Q.violation("left");
+    else if ((m.type === "sleep" || m.type === "lockscreen") && Q.active) awayEvent(m.type, m.data && m.data.secs);
+    else if (m.type === "lockdown-weak" && S.client && Array.isArray(m.data)) S.client.send("res", { how: "weak", what: m.data.join(", ") });
     else if (m.type === "apps-closed" && S.client && Array.isArray(m.data)) S.client.send("res", { how: "apps", what: m.data.join(", ") });
   });
+  // during a quiz or focus session, links that would leave the page (like the "Powered by Netlify" badge) do nothing
+  document.addEventListener("click", (e) => {
+    if (!(Q.active || (typeof Focus !== "undefined" && Focus.active))) return;
+    const a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+    if (!a) return;
+    let u; try { u = new URL(a.href, location.href); } catch (er) { return; }
+    if (u.origin !== location.origin || a.target === "_blank") { e.preventDefault(); e.stopPropagation(); }
+  }, true);
+  // no copying the quiz out, and no pasting text in from outside (only things copied inside your own answer)
+  let innerClip = "";
+  document.addEventListener("copy", () => { if (Q.active) { try { innerClip = String(window.getSelection() || ""); } catch (e) {} } }, true);
+  document.addEventListener("beforeinput", (e) => {
+    if (Q.active && (e.inputType === "insertFromPaste" || e.inputType === "insertFromDrop" || e.inputType === "insertFromPasteAsQuotation")) e.preventDefault();
+  }, true);
   for (const evName of ["copy", "cut", "paste", "contextmenu", "drop", "dragstart"]) {
     document.addEventListener(evName, (e) => {
       if (!Q.active) return;
@@ -2259,27 +2362,34 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
   // ---- focus sounds: a bar at the bottom of the quiz. Only the built-in sounds the teacher allowed.
   const MusicBar = {
     el: null,
-    show(groups) {
+    // groups: which kinds of music are allowed. "All" plays every allowed track one after another and repeats.
+    show(groups, preferAll) {
       this.hide();
       const sounds = M.Music.SOUNDS.filter((x) => groups.includes(x.group));
       if (!sounds.length) return;
       const pref = store.get("qd-music") || {};
-      let cur = sounds.find((x) => x.id === pref.sound) ? pref.sound : sounds[0].id;
+      const ALL = "__all";
+      let cur = preferAll && !pref.sound ? ALL : (pref.sound === ALL || sounds.find((x) => x.id === pref.sound)) ? pref.sound : (preferAll ? ALL : sounds[0].id);
+      const startCur = () => cur === ALL ? M.Music.playList(sounds.map((x) => x.id)) : M.Music.play(cur);
       const vol = typeof pref.vol === "number" ? pref.vol : 0.5;
       M.Music.setVolume(vol);
       const save = () => store.set("qd-music", { sound: cur, vol: +slider.value });
       const btn = h("button", { class: "btn small music-play", type: "button", "aria-pressed": "false", onclick: () => {
         if (M.Music.playing()) { M.Music.stop(); paint(); return; }
-        if (!M.Music.play(cur)) { note.textContent = "This browser can't play sound."; return; }
+        if (!startCur()) { note.textContent = "This browser can't play sound."; return; }
         paint();
       } }, "Play");
-      const pick = h("select", { class: "input", "aria-label": "Sound", onchange: () => { cur = pick.value; save(); if (M.Music.playing()) M.Music.play(cur); } },
+      const pick = h("select", { class: "input", "aria-label": "Sound", onchange: () => { cur = pick.value; save(); if (M.Music.playing()) startCur(); } },
+        h("option", { value: ALL, selected: cur === ALL }, `All of it \u2014 ${sounds.length} tracks, one after another (repeats)`),
         M.Music.GROUPS.filter(([g]) => groups.includes(g)).map(([g, label]) => h("optgroup", { label }, sounds.filter((x) => x.group === g).map((x) => h("option", { value: x.id, selected: x.id === cur }, x.name)))));
+      // in playlist mode, show what's playing now
+      const nowEl = h("span", { class: "muted small music-now" });
+      const nowId = setInterval(() => { if (!this.el) { clearInterval(nowId); return; } const id = M.Music.inList() ? M.Music.current() : null; const x = id && M.Music.SOUNDS.find((y) => y.id === id); nowEl.textContent = x ? "Now: " + x.name : ""; }, 1000);
       const slider = h("input", { type: "range", min: 0, max: 1, step: 0.05, value: vol, "aria-label": "Volume", oninput: () => { M.Music.setVolume(+slider.value); save(); } });
       const note = h("span", { class: "muted small" });
       const paint = () => { const on = !!M.Music.playing(); btn.textContent = on ? "Pause" : "Play"; btn.setAttribute("aria-pressed", String(on)); };
       this.el = h("div", { class: "music-bar", role: "region", "aria-label": "Focus sounds" }, h("span", { class: "music-label" }, "Focus sounds"), btn, pick,
-        h("label", { class: "music-vol" }, h("span", {}, "Volume"), slider), note);
+        h("label", { class: "music-vol" }, h("span", {}, "Volume"), slider), nowEl, note);
       document.body.append(this.el);
       document.body.classList.add("has-music");
     },
@@ -2370,7 +2480,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       if (!this.st.form && this.i > 0 && !this.results[this.i - 1]) this.i -= 1;     // the question that was open is shown again
       const allDone = this.results.filter(Boolean).length >= this.total;
       this.next();
-      if (Lock.on && !allDone && !this.continued) this.violation("reload");
+      if (Lock.on && !allDone && !this.continued) this.violation(IN_APP && QDA && QDA.relaunched ? "closed" : "reload");
       this.continued = false;
     },
     hookClient() {
@@ -2384,10 +2494,10 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     rescore() { this.you = this.results.reduce((a, r) => a + (r && typeof r.pts === "number" ? r.pts : 0), 0); },
     stamp() { return clock((Date.now() - this.started) / 1000); },
 
-    violation(why) {
+    violation(why, extra) {
       if (this.overlay && this.overlay.why !== "leave" && this.overlay.why !== "unlocked") return;     // already frozen
       this.violations.push([why, `${this.stamp()}  (question ${this.i})`]);
-      if (S.client) { S.client.frozen = true; S.client.send("viol", { why }); }
+      if (S.client) { S.client.frozen = true; S.client.send("viol", Object.assign({ why }, extra || {})); }
       this.save();
       this.showOverlay(why);
     },
@@ -2406,6 +2516,9 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         wait = "Your teacher has been asked...";
       } else if (why === "monitor") { head = "Extra monitor detected"; sub = "Only one screen is allowed. Unplug the extra monitor. Your teacher has been told."; }
       else if (why === "reload") { head = "You reloaded the quiz"; sub = "The quiz is frozen and your teacher has been told."; }
+      else if (why === "sleep") { head = "Your computer went to sleep"; sub = "Closing the lid or sleeping counts as leaving. The quiz is frozen and your teacher has been told."; }
+      else if (why === "lockscreen") { head = "You locked the screen"; sub = "Locking the computer counts as leaving. The quiz is frozen and your teacher has been told."; }
+      else if (why === "closed") { head = "Quiz Duel was closed"; sub = "The app was closed or the computer restarted during the quiz. The quiz is frozen and your teacher has been told."; }
       else { head = "You left the quiz"; sub = "The quiz is frozen and your teacher has been told."; }
       if (this.rival && !leave) sub += ` ${this.rival.name} is still racing!`;
       const waitEl = h("p", { class: "ov-wait" }, wait);
@@ -2504,7 +2617,8 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       later(1000, step);
     },
     header() {
-      const left = S.preview ? APP + "  ·  Student preview" : APP + (S.client ? `  ·  ${S.client.name}` : "");
+      const left = [S.preview ? APP + "  ·  Student preview" : APP + (S.client ? `  ·  ${S.client.name}` : ""),
+        statusChip(S.client ? S.client.code : S.preview ? "Preview" : "Practice")];
       const leaveBtn = Lock.on ? h("button", { class: "btn tiny-btn", onclick: () => this.requestLeave() }, "Leave quiz (Esc)") : null;
       this.scoreEl = h("span", {});
       this.paintScore();
@@ -2832,7 +2946,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         else if (this.you === this.them && this.youRounds === this.themRounds) { head = "It's a draw."; cls = "warn"; }
         else { head = `${this.rival.name} wins this time.`; cls = "bad"; }
       } else { head = "Quiz finished!"; cls = "navy"; }
-      const names = { left: "left the quiz", monitor: "extra monitor", reload: "reloaded the page" };
+      const names = { left: "left the quiz", monitor: "extra monitor", reload: "reloaded the page", sleep: "computer went to sleep", lockscreen: "locked the screen", closed: "app was closed" };
       const items = this.problems.map((p, k) => {
         const r = this.results[k];
         if (!r) return h("li", { class: "res bad" }, h("div", { class: "res-head" }, h("span", { class: "tag" }, "not done"), h("span", {}, p.q.split("\n")[0])));

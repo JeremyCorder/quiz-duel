@@ -415,6 +415,16 @@ table.dash { width: 100%; border-collapse: collapse; font-size: .95rem; }
 .live-text { max-height: 320px; overflow: auto; }
 .rev-sub { margin: 14px 0 6px; }
 .version { text-align: center; margin-top: 22px; opacity: .7; }
+.status-chip { display: inline-flex; align-items: center; gap: 10px; margin-left: 12px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: .82rem; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.status-chip .st-clock { color: var(--ink); }
+.status-chip .st-batt.low { color: #ff6b81; }
+.status-chip .st-code { letter-spacing: .05em; color: var(--accent); max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 640px) { .status-chip .st-code { display: none; } }
+.focus-card { position: relative; }
+.focus-away { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center;
+  background: color-mix(in srgb, var(--card) 96%, #ff4d6d); border-radius: inherit; }
+.focus-away[hidden] { display: none; }
+.music-now { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* printing */
 #print-area { display: none; }
 @media print {

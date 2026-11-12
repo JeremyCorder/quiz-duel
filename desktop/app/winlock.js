@@ -13,7 +13,7 @@ const fs = require("fs");
 const path = require("path");
 
 const IS_WIN = process.platform === "win32";
-let guard = null, backupFile = null, applied = false;
+let guard = null, backupFile = null, applied = false, flagFile = null;
 
 function guardPath() {
   const p = path.join(process.resourcesPath || "", "bin", "QuizDuelKeys.exe");
@@ -23,7 +23,8 @@ function startKeyBlocker() {
   if (!IS_WIN || guard) return;
   const exe = guardPath(); if (!exe) return;
   try {
-    guard = spawn(exe, [String(process.pid)], { windowsHide: true, stdio: "ignore" });
+    // the guard also reopens Quiz Duel if it's ended (e.g. in Task Manager) while a High quiz is locked
+    guard = spawn(exe, [String(process.pid), flagFile || "", process.execPath], { windowsHide: true, stdio: "ignore" });
     guard.on("exit", () => { guard = null; });
     guard.on("error", () => { guard = null; });
   } catch (e) { guard = null; }
@@ -49,15 +50,24 @@ async function readValue(key, name) {
 const writeValue = (key, name, v) => reg(["add", key, "/v", name, "/t", "REG_DWORD", "/d", String(v), "/f"]);
 const deleteValue = (key, name) => reg(["delete", key, "/v", name, "/f"]);
 
+const NICE = { DisableTaskMgr: "Task Manager", DisableLockWorkstation: "Lock", DisableChangePassword: "Change password", NoLogoff: "Sign out",
+  ThreeFingerSlideEnabled: "3-finger swipes", FourFingerSlideEnabled: "4-finger swipes" };
+// returns the settings Windows refused to change (to tell the teacher)
 async function applySettings() {
-  if (!IS_WIN || applied) return;
+  if (!IS_WIN) return [];
+  try { if (flagFile) fs.writeFileSync(flagFile, String(Date.now())); } catch (e) {}
+  if (applied) return [];
   applied = true;
   const old = [];
   for (const [key, name] of SETTINGS) old.push([key, name, await readValue(key, name)]);
-  try { fs.writeFileSync(backupFile, JSON.stringify(old)); } catch (e) { applied = false; return; }   // no backup -> change nothing
+  try { fs.writeFileSync(backupFile, JSON.stringify(old)); } catch (e) { applied = false; return []; }   // no backup -> change nothing
   for (const [key, name, v] of SETTINGS) await writeValue(key, name, v);
+  const failed = [];
+  for (const [key, name, v] of SETTINGS) if ((await readValue(key, name)) !== v && !/Finger/.test(name)) failed.push(NICE[name] || name);
+  return failed;
 }
 async function restoreSettings() {
+  try { if (flagFile) fs.unlinkSync(flagFile); } catch (e) {}
   if (!IS_WIN || !backupFile || !fs.existsSync(backupFile)) { applied = false; return; }
   let old = [];
   try { old = JSON.parse(fs.readFileSync(backupFile, "utf8")); } catch (e) {}
@@ -67,6 +77,7 @@ async function restoreSettings() {
 }
 // same thing without waiting, for when the app is closing right now
 function restoreSettingsNow() {
+  try { if (flagFile) fs.unlinkSync(flagFile); } catch (e) {}
   if (!IS_WIN || !backupFile || !fs.existsSync(backupFile)) return;
   const { execFileSync } = require("child_process");
   let old = [];
@@ -84,6 +95,7 @@ module.exports = {
   async init(userDataDir) {
     if (!IS_WIN) return;
     backupFile = path.join(userDataDir, "windows-settings-backup.json");
+    flagFile = path.join(userDataDir, "quiz-locked.flag");
     await restoreSettings();
     startKeyBlocker();
   },

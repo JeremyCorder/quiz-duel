@@ -39,6 +39,9 @@ jobs:
           & "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /target:winexe /optimize /out:bin\QuizDuelKeys.exe /reference:System.Windows.Forms.dll native\QuizDuelKeys.cs
           if (!(Test-Path bin\QuizDuelKeys.exe)) { throw "keyboard guard did not build" }
       - run: npm ci
+      - name: Give this build its own version number (the app updates itself to higher numbers)
+        shell: bash
+        run: npm version "1.0.${{ github.run_number }}" --no-git-tag-version --allow-same-version
       - run: npx electron-builder --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -47,12 +50,16 @@ jobs:
           name: quiz-duel-${{ matrix.os }}
           path: |
             desktop/dist/*.exe
+            desktop/dist/*.exe.blockmap
+            desktop/dist/latest.yml
             desktop/dist/*.dmg
       - if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: |
             desktop/dist/*.exe
+            desktop/dist/*.exe.blockmap
+            desktop/dist/latest.yml
             desktop/dist/*.dmg
       - if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
@@ -63,4 +70,6 @@ jobs:
           make_latest: true
           files: |
             desktop/dist/*.exe
+            desktop/dist/*.exe.blockmap
+            desktop/dist/latest.yml
             desktop/dist/*.dmg

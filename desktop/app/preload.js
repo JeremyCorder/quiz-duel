@@ -5,6 +5,7 @@ const listeners = new Set();
 ipcRenderer.on("quizduel", (e, msg) => { for (const fn of listeners) { try { fn(msg); } catch (er) { /* ignore */ } } });
 contextBridge.exposeInMainWorld("quizDuelApp", {
   isApp: true,
+  installUpdate: () => ipcRenderer.invoke("qd:install-update"),
   // true when the app was reopened by itself because it was closed during a locked quiz (e.g. ended in Task Manager)
   relaunched: (() => { try { return !!ipcRenderer.sendSync("qd:relaunched"); } catch (e) { return false; } })(),
   info: () => ipcRenderer.invoke("qd:info"),

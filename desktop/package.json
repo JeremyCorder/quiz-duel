@@ -75,6 +75,17 @@
         "NSHumanReadableCopyright": "Quiz Duel"
       }
     },
-    "copyright": "Quiz Duel"
+    "copyright": "Quiz Duel",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "JeremyCorder",
+        "repo": "quiz-duel",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
   }
 }

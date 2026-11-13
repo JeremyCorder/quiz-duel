@@ -2142,11 +2142,23 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     const now = Date.now(), gap = now - tickAt; tickAt = now;
     if (gap > 20000 && Q.active && !IN_APP) awayEvent("sleep", Math.round(gap / 1000));
   }, 2000);
+  // the app downloaded a new version: offer to restart (never in the middle of a quiz or focus session)
+  function updateBox(version) {
+    if (!QDA || !QDA.installUpdate || document.querySelector(".update-box")) return;
+    if (Q.active || Focus.active) { setTimeout(() => updateBox(version), 30000); return; }
+    const box = h("div", { class: "update-box card", role: "dialog", "aria-label": "Update ready" },
+      h("b", {}, "A new version of Quiz Duel is ready"), h("p", { class: "muted small" }, (version ? "Version " + version + ". " : "") + "It takes a few seconds and opens again by itself."),
+      h("div", { class: "row" },
+        h("button", { class: "btn", onclick: () => { box.querySelector("p").textContent = "Updating..."; QDA.installUpdate().then((ok) => { if (!ok) box.remove(); }, () => box.remove()); } }, "Restart & update"),
+        h("button", { class: "btn ghost", onclick: () => box.remove() }, "Later")));
+    document.body.append(box);
+  }
   if (QDA) QDA.on((m) => {
     if (!m) return;
     if (m.type === "displays") { appDisplays = +m.data || 1; if (Lock.on && appDisplays > 1 && !(Q.overlay && Q.overlay.why === "monitor")) Q.violation("monitor"); }
     else if (m.type === "left" && Lock.on && Date.now() > Lock.grace) Q.violation("left");
     else if ((m.type === "sleep" || m.type === "lockscreen") && Q.active) awayEvent(m.type, m.data && m.data.secs);
+    else if (m.type === "update-ready") updateBox(m.data);
     else if (m.type === "lockdown-weak" && S.client && Array.isArray(m.data)) S.client.send("res", { how: "weak", what: m.data.join(", ") });
     else if (m.type === "apps-closed" && S.client && Array.isArray(m.data)) S.client.send("res", { how: "apps", what: m.data.join(", ") });
   });

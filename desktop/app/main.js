@@ -153,6 +153,7 @@ function setLocked(on, opts) {
   appGames = !!(opts && opts.games);
   appStrict = locked && !(opts && opts.strict === false);      // High security: Task Manager etc. are closed too
   clearInterval(watcher); clearInterval(clipTimer);
+  if (!locked && updateReady) setTimeout(() => send("update-ready", updateReady), 1500);   // the quiz ended: offer the waiting update
   // the Windows settings (Ctrl+Alt+Del menu, touchpad swipes) are for High security only
   if (locked && !(opts && opts.strict === false)) {
     winlock.lock().then((failed) => { if (failed && failed.length) send("lockdown-weak", failed); }, () => {});
@@ -192,6 +193,27 @@ function coverOtherScreens() {
 function fromSite(e) {
   try { return new URL(e.senderFrame.url).origin === SITE.origin; } catch (er) { return false; }
 }
+// ---------------------------------------------------------------- automatic updates (Windows)
+// Checks GitHub for a newer Quiz Duel when it opens and every 3 hours, downloads it quietly, then offers
+// "Restart & update" - never during a locked quiz or focus session. (Macs need a paid Apple signature for this.)
+let updater = null, updateReady = null;
+function setupUpdates() {
+  if (process.platform !== "win32" || !app.isPackaged) return;
+  try { updater = require("electron-updater").autoUpdater; } catch (e) { return; }
+  updater.autoDownload = true;
+  updater.autoInstallOnAppQuit = true;          // "Later": it installs the next time Quiz Duel closes
+  updater.on("update-downloaded", (info) => { updateReady = info && info.version; if (!locked) send("update-ready", updateReady); });
+  updater.on("error", () => {});                  // offline, GitHub down... just try again later
+  const check = () => { if (!locked) updater.checkForUpdates().catch(() => {}); };
+  setTimeout(check, 15000);
+  setInterval(check, 3 * 60 * 60 * 1000);
+}
+ipcMain.handle("qd:install-update", (e) => {
+  if (!fromSite(e) || !updater || !updateReady || locked) return false;
+  quitting = true; try { winlock.shutdown(); } catch (er) {}
+  setImmediate(() => updater.quitAndInstall(true, true));      // install quietly, then open the new version
+  return true;
+});
 const RELAUNCHED = process.argv.includes("--qd-relaunched");
 ipcMain.on("qd:relaunched", (e) => { e.returnValue = RELAUNCHED; });
 ipcMain.handle("qd:info", (e) => ({ version: app.getVersion(), platform: process.platform, displays: screen.getAllDisplays().length }));
@@ -226,6 +248,7 @@ else {
   app.whenReady().then(async () => {
     // works even if the Quiz Duel window isn't responding to the keyboard
     try { globalShortcut.register("CommandOrControl+Shift+Alt+Q", () => { if (!locked) quitNow(); }); } catch (e) {}
+    setupUpdates();
     app.on("will-quit", () => { try { globalShortcut.unregisterAll(); } catch (e) {} });
     await winlock.init(app.getPath("userData")).catch(() => {});
     Menu.setApplicationMenu(process.platform === "darwin" ? Menu.buildFromTemplate([{ label: "Quiz Duel", submenu: [] },

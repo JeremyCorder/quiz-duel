@@ -34,6 +34,9 @@ function linkToUrl(link) {
     // focus sessions: quizduel://focus?focus=CODE (teacher's rules) or ?mine=25-5-4-3-60-G (own times)
     const focus = (l.searchParams.get("focus") || "").toUpperCase().replace(/[^0-9A-Z-]/g, "").slice(0, 40);
     const mine = (l.searchParams.get("mine") || "").toUpperCase().replace(/[^0-9G-]/g, "").slice(0, 30);
+    // a continue / redo / change-answers key from the teacher (6 letters and numbers)
+    const key = (l.searchParams.get("key") || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+    if (key.length === 6) u.searchParams.set("key", key);
     if (focus) u.searchParams.set("focus", focus);
     if (mine) u.searchParams.set("mine", mine);
   } catch (e) { /* plain start */ }

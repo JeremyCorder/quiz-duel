@@ -23,7 +23,7 @@
   const DOWNLOADS = window.QD_DOWNLOADS || { win: "", mac: "" };     // filled in by build.py
   let appDisplays = 1;
   if (QDA) QDA.info().then((i) => { appDisplays = i.displays || 1; }).catch(() => {});
-  const appLink = (code, name, email) => "quizduel://join?code=" + encodeURIComponent(code) + (name ? "&name=" + encodeURIComponent(name) : "") + (email ? "&email=" + encodeURIComponent(email) : "");
+  const appLink = (code, name, email, key) => "quizduel://join?code=" + encodeURIComponent(code) + (name ? "&name=" + encodeURIComponent(name) : "") + (email ? "&email=" + encodeURIComponent(email) : "") + (key ? "&key=" + encodeURIComponent(key) : "");
   const quitApp = () => { if (QDA) QDA.quit(); else home(); };
   // security: low = any browser, leaving is only reported; medium = locked browser tab; high = the Quiz Duel app
   const SECURITY = { low: "Low", medium: "Medium", high: "High" };
@@ -520,7 +520,7 @@
         const v = this.h.admit ? this.h.admit(msg) : { ok: true };
         if (!v.ok) { this.relay.send(src, { t: "nope", why: v.why }); return; }
         this.addr.set(msg.sid, src);
-        this.relay.send(src, { t: "quiz", payload: this.payload, resume: v.resume || null });
+        this.relay.send(src, { t: "quiz", payload: this.payload, resume: v.resume || null, fix: !!v.fix });
         this.flush(msg.sid);
       } else if (msg.t === "ev" && msg.ev && msg.ev.sid) {
         this.addr.set(msg.ev.sid, src);
@@ -582,7 +582,7 @@
           },
           message: (src, msg) => {
             if (!msg) return;
-            if (msg.t === "quiz") finish(() => { this.startPulse(); this.resume = msg.resume || null; resolve(msg.payload); });
+            if (msg.t === "quiz") finish(() => { this.startPulse(); this.resume = msg.resume || null; this.fix = !!msg.fix; resolve(msg.payload); });
             else if (msg.t === "nope") fail(msg.why || "wrongcode");
             else if (msg.t === "ack") {
               this.unacked.delete(msg.eid);
@@ -695,8 +695,8 @@
     const name = h("input", { id: "name", class: "input", maxlength: 30, autocomplete: "name", placeholder: "First and last name", value: pre.name || saved.name || "" });
     const email = h("input", { id: "email", class: "input", type: "email", maxlength: 80, autocomplete: "email", placeholder: "you@school.org", value: pre.email || saved.email || "" });
     const code = h("input", { id: "code", class: "input code-input", maxlength: 8, autocomplete: "off", autocapitalize: "characters", placeholder: "ABC123", value: pre.code || "" });
-    const key = h("input", { id: "key", class: "input code-input", maxlength: 8, autocomplete: "off", autocapitalize: "characters", placeholder: "KEY123" });
-    const keyRow = h("div", { class: "stack", hidden: true }, h("label", { for: "key" }, "Continue or redo key from your teacher"), key);
+    const key = h("input", { id: "key", class: "input code-input", maxlength: 8, autocomplete: "off", autocapitalize: "characters", placeholder: "KEY123", value: pre.key || "" });
+    const keyRow = h("div", { class: "stack", hidden: !pre.key }, h("label", { for: "key" }, "Continue or redo key from your teacher"), key);
     const msg = h("p", { class: "msg", "aria-live": "polite" });
     const btn = h("button", { class: "btn", type: "submit" }, "Join");
     const form = h("form", { class: "stack", novalidate: true, onsubmit: (e) => { e.preventDefault(); go(); } },
@@ -726,9 +726,9 @@
         const payload = await client.connect();
         S.client = client;
         S.quiz = decodeQuiz(cd, payload);
-        if (needsApp(S.quiz.settings) && !IN_APP) { needApp(nm, em); return; }
+        if (needsApp(S.quiz.settings) && !IN_APP) { needApp(nm, em, ky); return; }
         client.send("join", { total: S.quiz.problems.length, email: em, key: ky || undefined });
-        if (client.resume) { resumeFromTeacher(client.resume); return; }
+        if (client.resume) { resumeFromTeacher(client.resume, client.fix); return; }
         store.set("md-student", { state: "lobby", code: cd, name: nm, email: em, sid: client.sid });
         lobby();
       } catch (e) {
@@ -749,8 +749,9 @@
   }
 
   // a continue key: pick up where the teacher's records say this student stopped
-  function resumeFromTeacher(resume) {
+  function resumeFromTeacher(resume, fix) {
     const c = S.client;
+    if (fix) return fixFromTeacher(resume);
     Q.reset(); Q.setup();
     for (const a of resume) {
       if (!(a.qn >= 1 && a.qn <= Q.total)) continue;
@@ -767,15 +768,36 @@
       h("button", { class: "btn big", onclick: () => { wipeClipboard(); c.send("start"); Q.resume(); } }, "Continue the quiz"))));
   }
 
+  // "Continue and change answers": start again from question 1 with the earlier answers filled in (or shown),
+  // so the student can keep or change each one. The first try stays in the teacher's list.
+  function fixFromTeacher(prev) {
+    const c = S.client;
+    Q.reset(); Q.setup();
+    Q.prev = {};
+    for (const a of prev || []) {
+      if (!(a.qn >= 1 && a.qn <= Q.total) || a.skipped) continue;
+      const p = S.quiz.problems[a.qn - 1];
+      Q.prev[a.qn - 1] = p.kind === "long" ? "(your earlier writing is filled in below)" : shownRaw(p, a.raw || "");
+      Q.drafts[a.qn - 1] = a.raw || "";
+    }
+    Q.continued = true;
+    store.set("md-student", { state: "quiz", code: c.code, name: c.name, email: c.email, sid: c.sid, i: 0, them: 0, youRounds: 0, themRounds: 0, started: Date.now(), violations: [], results: [], drafts: Q.drafts, prev: Q.prev });
+    const had = Object.keys(Q.prev).length;
+    show(topbar(APP, c.name), h("main", { class: "narrow" }, card(
+      h("h2", {}, "Welcome back \u2014 you can change your answers"),
+      h("p", {}, `Your teacher let you go through the quiz again. ${had ? `Your earlier answers (${had}) are filled in or shown on each question \u2014 keep them or change them, then hand each one in.` : "Start from question 1."}`),
+      h("button", { class: "btn big", onclick: () => { wipeClipboard(); c.send("start"); Q.resume(); } }, "Start"))));
+  }
+
   function decodeQuiz(code, payload) {
     const data = unseal(code, payload);
     return { title: data.title, settings: data.settings, problems: data.problems };   // no answers in here
   }
 
   // High security: the quiz only runs in the Quiz Duel app
-  function needApp(nm, em) {
+  function needApp(nm, em, ky) {
     const c = S.client;
-    const link = appLink(c.code, nm, em);
+    const link = appLink(c.code, nm, em, ky);
     const help = h("div", { class: "notice app-help" },
       h("b", {}, "The app didn't open?"),
       h("ol", {},
@@ -1802,10 +1824,24 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       const owner = email ? findByEmail(email) : null;
       if (key) {
         const k = live.keys[key];
-        if (k && k.used && k.by === msg.sid) return { ok: true };            // the same student saying hello again
-        if (!k || k.used || (k.email && k.email !== email)) return { ok: false, why: "badkey" };
+        if (k && k.used && k.by === msg.sid) return { ok: true, resume: k.type === "fix" ? k.prefill : undefined, fix: k.type === "fix" };   // same student saying hello again
+        // the same student (same email) may use it again for 15 minutes, e.g. moving from a browser into the app
+        const again = k && k.used && k.email && k.email === email && Date.now() - k.used < 15 * 60 * 1000;
+        if (!k || (k.used && !again) || (k.email && k.email !== email)) return { ok: false, why: "badkey" };
+        if (again) {
+          const prevSid = k.by; k.by = msg.sid;
+          if (k.type === "continue" && live.students[prevSid]) { moveTo(prevSid, msg.sid); return { ok: true, resume: resumeData(msg.sid) }; }
+          if (k.type === "fix") return { ok: true, resume: k.prefill || [], fix: true };
+          return { ok: true };
+        }
         k.used = Date.now(); k.by = msg.sid;
         const oldSid = owner ? owner[0] : null;
+        if (k.type === "fix") {
+          k.prefill = oldSid ? resumeData(oldSid) : [];
+          if (oldSid) archive(oldSid);
+          log(`${msg.name || email} used a CHANGE-ANSWERS key: going through again with their earlier answers (the earlier try is kept in your list).`);
+          return { ok: true, resume: k.prefill, fix: true };
+        }
         if (k.type === "redo") {
           if (oldSid) archive(oldSid);
           log(`${msg.name || email} used a REDO key: starting over (the earlier try is kept in your list).`);
@@ -1909,11 +1945,30 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       setKids(out,
         h("div", { class: "row small-gap" }, h("b", {}, "Let them back in:"),
           h("button", { class: "btn small", onclick: () => give("continue") }, "Give a continue key"),
+          h("button", { class: "btn small ghost", onclick: () => give("fix") }, "Continue + change answers"),
           h("button", { class: "btn small ghost", onclick: () => give("redo") }, "Give a redo key")),
-        h("p", { class: "hint" }, "Continue = pick up where they stopped, on any computer. Redo = start the quiz over (the first try stays in your list). The student joins again with their email and types the key."),
+        h("p", { class: "hint" }, "Continue = pick up where they stopped, on any computer. Continue + change answers = go through again with their earlier answers filled in, so they can fix them. Redo = start over from blank. (For the last two, the first try stays in your list.) Email the key, or the student joins again with their email and types it."),
         mine.length ? h("ul", { class: "key-list" }, mine.sort((x, y) => y[1].made - x[1].made).map(([key, k], i) => h("li", { class: i === 0 && !k.used ? "key-new" : "" },
-          h("span", { class: "bigkey mono" }, key), ` ${k.type} key — ${k.used ? "used " + ago(k.used) : "not used yet"}`))) : null);
+          h("span", { class: "bigkey mono" }, key), ` ${KEY_NAMES[k.type] || k.type} key \u2014 ${k.used ? "used " + ago(k.used) : "not used yet"}`,
+          !k.used && s.email ? h("span", { class: "key-mail" },
+            h("a", { class: "btn tiny-btn", href: keyMail(key, k, s, true), target: "_blank", rel: "noopener" }, "Email it with Gmail"),
+            h("a", { class: "btn tiny-btn ghost", href: keyMail(key, k, s, false) }, "Other email app")) : null))) : null);
       return out;
+    }
+    const KEY_NAMES = { continue: "continue", fix: "continue + change answers", redo: "redo" };
+    // an email to the student with the key and a link that opens the quiz with everything filled in.
+    // It opens in the TEACHER's own email (Gmail or their mail app) - Quiz Duel doesn't send email itself.
+    function keyMail(key, k, s, gmail) {
+      const link = location.origin + location.pathname + "?code=" + live.code + "&name=" + encodeURIComponent(s.name || "") + "&email=" + encodeURIComponent(s.email || "") + "&key=" + key;
+      const what = { continue: "pick up where you stopped", fix: "go through the quiz again and change your answers (your earlier answers are filled in)", redo: "start the quiz over" }[k.type] || "get back in";
+      const subject = `Your Quiz Duel key for ${live.title}${live.period ? " (" + live.period + ")" : ""}`;
+      const body = `Hi ${(s.name || "").split(" ")[0] || "there"},\n\nYou can ${what}.\n\nOpen this link to get back in (everything is filled in):\n${link}\n\n`
+        + `Or join yourself: quiz code ${live.code}, your email ${s.email}, and this key: ${key}\n\n`
+        + (live.security === "high" || live.closeGames ? "This quiz runs in the Quiz Duel app. The link will offer to open it.\n\n" : "")
+        + "The key works once, only with your email.";
+      return gmail
+        ? "https://mail.google.com/mail/?view=cm&fs=1&to=" + encodeURIComponent(s.email) + "&su=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(body)
+        : "mailto:" + encodeURIComponent(s.email) + "?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(body);
     }
     // live view of one student: which question they're on and what they're typing right now
     const liveBox = h("div", { class: "live-view" });
@@ -2461,7 +2516,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
   const Q = {
     active: false, overlay: null,
     reset() {
-      Object.assign(this, { i: 0, you: 0, them: 0, youRounds: 0, themRounds: 0, results: [], violations: [], drafts: {}, started: Date.now(), overlay: null, finished: null, dom: null });
+      Object.assign(this, { i: 0, you: 0, them: 0, youRounds: 0, themRounds: 0, results: [], violations: [], drafts: {}, prev: {}, started: Date.now(), overlay: null, finished: null, dom: null });
     },
     setup() {
       this.st = S.quiz.settings; this.problems = S.quiz.problems; this.total = this.problems.length;
@@ -2470,13 +2525,13 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     save() {
       if (!S.client || this.finished) return;
       store.set("md-student", { state: "quiz", code: S.client.code, name: S.client.name, email: S.client.email, sid: S.client.sid, i: this.i, them: this.them,
-        youRounds: this.youRounds, themRounds: this.themRounds, started: this.started, violations: this.violations, results: this.results, drafts: this.drafts });
+        youRounds: this.youRounds, themRounds: this.themRounds, started: this.started, violations: this.violations, results: this.results, drafts: this.drafts, prev: this.prev });
     },
     restore(saved) {
       this.reset();
       this.setup();
       Object.assign(this, { i: saved.i || 0, them: saved.them || 0, youRounds: saved.youRounds || 0, themRounds: saved.themRounds || 0,
-        started: saved.started || Date.now(), violations: saved.violations || [], drafts: saved.drafts || {} });
+        started: saved.started || Date.now(), violations: saved.violations || [], drafts: saved.drafts || {}, prev: saved.prev || {} });
       this.results = saved.results || [];
       this.rescore();
       // answers that hadn't been checked yet get sent again (same id, so they're never counted twice)
@@ -2697,7 +2752,9 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         }
         const box = h("section", { class: "card qcard form-q" + (p.graph ? " with-graph" : "") },
           h("div", { class: "qmain" }, h("p", { class: "kicker" }, `Question ${k + 1}`),
-            h("pre", { class: "question" + (M.MATH_KINDS.includes(p.kind) ? " mono" : "") }, p.q), input, howto),
+            h("pre", { class: "question" + (M.MATH_KINDS.includes(p.kind) ? " mono" : "") }, p.q),
+            this.prev && this.prev[k] ? h("p", { class: "prev-answer" }, "Your earlier answer: ", h("b", {}, String(this.prev[k]).slice(0, 300)), " \u2014 keep it or change it.") : null,
+            input, howto),
           p.graph ? graphSvg(p.graph) : null);
         items.push({ k, p, box, howto, getRaw });
       }
@@ -2756,6 +2813,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
           h("div", { class: "choices", role: "radiogroup", "aria-label": "Answer choices" }, radios), h("div", { class: "answer-row" }, submitBtn, skipBtn));
         getRaw = () => picked;
         focus = () => { const r = form.querySelector("input[type=radio]:not(:disabled)"); if (r) r.focus(); };
+        keepDraft(this.i - 1, () => picked, (d) => { const r = form.querySelector(`input[value="${d}"]`); if (r) { r.checked = true; picked = d; } });
       } else if (p.kind === "long") {
         const w = writer(p.tools && p.tools.spell);
         form = h("form", { class: "answer-col", onsubmit: (e) => { e.preventDefault(); this.submit(false); } }, w.box, studentTools(p, () => w.page.innerText), h("div", { class: "answer-row" }, submitBtn, skipBtn));
@@ -2771,6 +2829,9 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         focus = () => answer.focus();
         keepDraft(this.i - 1, () => answer.value, (d) => { answer.value = d; });
       }
+      // change-answers mode: show what they handed in last time
+      const before = this.prev && this.prev[this.i - 1];
+      if (before !== undefined && before !== "") form.prepend(h("p", { class: "prev-answer" }, "Your earlier answer: ", h("b", {}, String(before).slice(0, 300)), " \u2014 keep it or change it."));
       const timeEl = h("span", { class: "time" }, "0.0s");
       let race = null;
       if (this.raceOn) {
@@ -3073,7 +3134,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
   else if (URL_CODE) {
     const saved = store.get("md-student");
     if (saved && saved.code === URL_CODE && saved.state === "quiz") rejoinStudent(saved);
-    else studentJoin({ code: URL_CODE, name: (QS.get("name") || "").slice(0, 30), email: (QS.get("email") || "").slice(0, 80) });
+    else studentJoin({ code: URL_CODE, name: (QS.get("name") || "").slice(0, 30), email: (QS.get("email") || "").slice(0, 80), key: (QS.get("key") || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6) });
   }
   else if (IN_APP && !store.get("md-student")) studentJoin();
   else home();

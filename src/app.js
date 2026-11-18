@@ -2217,6 +2217,8 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     else if (m.type === "lockdown-weak" && S.client && Array.isArray(m.data)) S.client.send("res", { how: "weak", what: m.data.join(", ") });
     else if (m.type === "apps-closed" && S.client && Array.isArray(m.data)) S.client.send("res", { how: "apps", what: m.data.join(", ") });
   });
+  // no ads while a quiz, preview or focus session is on screen
+  setInterval(() => { document.body.classList.toggle("no-ads", !!(Q.active || (typeof Focus !== "undefined" && Focus.active))); }, 500);
   // during a quiz or focus session, links that would leave the page (like the "Powered by Netlify" badge) do nothing
   document.addEventListener("click", (e) => {
     if (!(Q.active || (typeof Focus !== "undefined" && Focus.active))) return;

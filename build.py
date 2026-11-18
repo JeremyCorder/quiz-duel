@@ -21,4 +21,6 @@ html = html.replace("/*CORE*/", safe(read("core.js") + "\n" + read("builtin.js")
 html = html.replace("/*APP*/", safe(read("app.js")), 1)
 (out / "index.html").write_text(html, encoding="utf8")
 shutil.copytree(src / "fonts", out / "fonts", dirs_exist_ok=True)
+# Google AdSense asks for this file at the site's root
+(out / "ads.txt").write_text("google.com, pub-6630544573802881, DIRECT, f08c47fec0942fa0\n")
 print(f"built site/index.html {len(html) // 1024} KB; app downloads: {downloads['win'] or '(not set)'}")

@@ -2,6 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- Google AdSense. Ads appear only where the page puts them (home and teacher pages); Auto ads should stay OFF
+     in AdSense, and anything placed automatically is hidden during a quiz or focus session. Non-personalized ads
+     because students may be under 13. -->
+<script>(window.adsbygoogle = window.adsbygoogle || []).requestNonPersonalizedAds = 1;</script>
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6630544573802881" crossorigin="anonymous"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Quiz Duel</title>
 <meta name="description" content="Live, locked-down quizzes for any subject. Teachers watch every answer; students join with a code.">
@@ -430,6 +435,8 @@ table.dash { width: 100%; border-collapse: collapse; font-size: .95rem; }
 .key-mail { display: inline-flex; gap: 6px; margin-left: 10px; flex-wrap: wrap; }
 .key-mail a { text-decoration: none; }
 .prev-answer { margin: 0 0 8px; padding: 8px 10px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: 6px; font-size: .95rem; }
+/* no ads during a quiz or focus session (clicking one would count as leaving) */
+body.no-ads ins.adsbygoogle, body.no-ads .google-auto-placed, body.no-ads .adsbygoogle-noablate, body.no-ads iframe[id^="aswift"], body.no-ads [id^="google_ads_iframe"] { display: none !important; }
 /* printing */
 #print-area { display: none; }
 @media print {

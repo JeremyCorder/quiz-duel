@@ -104,7 +104,46 @@
   function wipeClipboard() { try { navigator.clipboard && navigator.clipboard.writeText("").catch(() => {}); } catch (e) { /* ignore */ } }
   const monitorCheckSupported = () => IN_APP || typeof window.screen.isExtended === "boolean";
   const extraMonitor = () => IN_APP ? appDisplays > 1 : window.screen.isExtended === true;
-  function clock(sec) { sec = Math.max(0, Math.floor(sec)); return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`; }
+  // timers: 4:05, and from an hour on 1:04:05
+  function clock(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    const hh = Math.floor(sec / 3600), mm = Math.floor((sec % 3600) / 60), ss = String(sec % 60).padStart(2, "0");
+    return hh ? `${hh}:${String(mm).padStart(2, "0")}:${ss}` : `${mm}:${ss}`;
+  }
+  // languages a teacher can allow in written answers. Students switch between the allowed ones; other letters are blocked.
+  const LANGS = [
+    ["en", "English", "EN", /[A-Za-z]/],
+    ["es", "Espa\u00f1ol", "ES", /[A-Za-z\u00c1\u00c9\u00cd\u00d3\u00da\u00dc\u00d1\u00e1\u00e9\u00ed\u00f3\u00fa\u00fc\u00f1]/],
+    ["fr", "Fran\u00e7ais", "FR", /[A-Za-z\u00c0-\u00ff\u0152\u0153]/],
+    ["de", "Deutsch", "DE", /[A-Za-z\u00c4\u00d6\u00dc\u00e4\u00f6\u00fc\u00df]/],
+    ["it", "Italiano", "IT", /[A-Za-z\u00c0-\u00ff]/],
+    ["pt", "Portugu\u00eas", "PT", /[A-Za-z\u00c0-\u00ff]/],
+    ["vi", "Ti\u1ebfng Vi\u1ec7t", "VI", /\p{Script=Latin}/u],
+    ["zh", "\u4e2d\u6587 (Chinese)", "\u4e2d", /[\p{Script=Han}\u3000-\u303f\uff01-\uff5e]/u],
+    ["ja", "\u65e5\u672c\u8a9e (Japanese)", "\u65e5", /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u3000-\u303f\uff01-\uff9f]/u],
+    ["ko", "\ud55c\uad6d\uc5b4 (Korean)", "\ud55c", /[\p{Script=Hangul}]/u],
+    ["ru", "\u0420\u0443\u0441\u0441\u043a\u0438\u0439 (Russian)", "RU", /\p{Script=Cyrillic}/u],
+    ["ar", "\u0627\u0644\u0639\u0631\u0628\u064a\u0629 (Arabic)", "AR", /[\p{Script=Arabic}]/u],
+    ["hi", "\u0939\u093f\u0928\u094d\u0926\u0940 (Hindi)", "HI", /\p{Script=Devanagari}/u],
+  ];
+  const LANG = Object.fromEntries(LANGS.map((l) => [l[0], l]));
+  // is this character allowed? w = the quiz's writing rules, cur = the language the student switched to
+  function charOk(ch, w, cur) {
+    if (!w || w.any) return true;
+    if (/\s/.test(ch) || /[.,!?;:'"()\-\u2013\u2014\u2026\u2018\u2019\u201c\u201d\u00bf\u00a1]/.test(ch)) return true;   // spaces and everyday punctuation
+    if (/[0-9]/.test(ch) || /[#$%&*+=<>@^_~|\\/\[\]{}\u00b0\u00b1\u00d7\u00f7\u2260\u2248\u2264\u2265\u221a\u221e\u03c0\u03b8\u0394\u03a3\u00b5\u03a9\u00b2\u00b3\u00bd\u00bc\u00be\u2190-\u21ff\u2022\u00a9\u20ac\u00a3\u00a5]/.test(ch)) return !!w.nums;
+    const l = LANG[cur] || LANG[(w.langs || ["en"])[0]];
+    return !!(l && l[3].test(ch));
+  }
+  // clock times always in the device's own time zone; Pacific time if the device doesn't say
+  const TZ = (() => { try { const z = Intl.DateTimeFormat().resolvedOptions().timeZone; if (z) return z; } catch (e) {} return "America/Los_Angeles"; })();
+  function fmtTime(t, sec) {
+    const o = { hour: "numeric", minute: "2-digit" }; if (sec) o.second = "2-digit";
+    try { return new Date(t).toLocaleTimeString([], Object.assign({ timeZone: TZ }, o)); } catch (e) { return new Date(t).toLocaleTimeString([], o); }
+  }
+  function fmtDateTime(t) {
+    try { return new Date(t).toLocaleString([], { timeZone: TZ, dateStyle: "medium", timeStyle: "short" }); } catch (e) { return new Date(t).toLocaleString(); }
+  }
   function download(name, blob) {
     const a = h("a", { href: URL.createObjectURL(blob), download: name });
     document.body.append(a); a.click(); a.remove();
@@ -155,7 +194,7 @@
   function statusChip(code) {
     const clock = h("span", { class: "st-clock" }), batt = h("span", { class: "st-batt" });
     const paint = () => {
-      clock.textContent = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      clock.textContent = fmtTime(Date.now());
       if (batteryInfo) {
         const pct = Math.round(batteryInfo.level * 100);
         batt.textContent = (batteryInfo.charging ? "\u26a1" : "\ud83d\udd0b") + " " + pct + "%";
@@ -244,7 +283,10 @@
   // A small word processor, laid out like Google Docs: undo/redo, style, font, size, bold/italic/underline/strike,
   // colour, highlight, super/subscript, alignment, line spacing, lists, indent, symbols, line, clear formatting.
   function writer(spell) {
-    const page = h("div", { id: "answer", class: "paper long-answer", contenteditable: "true", role: "textbox", "aria-multiline": "true", "aria-label": "Your answer", spellcheck: spell ? "true" : "false", lang: "en" });
+    // the teacher's rules for this quiz: colour, size, which languages
+    const W = (S.quiz && S.quiz.settings && S.quiz.settings.writing) || null;
+    const allowColor = !W || W.color !== false, allowSize = !W || W.size !== false, allowSymbols = !W || W.any || W.nums;
+    const page = h("div", { id: "answer", class: "paper long-answer lang-checked", contenteditable: "true", role: "textbox", "aria-multiline": "true", "aria-label": "Your answer", spellcheck: spell ? "true" : "false", lang: W && !W.any ? (Q.lang || W.langs[0] || "en") : "en" });
     const count = h("span", {}, "0 words");
     let saved = null;
     const keep = () => { const sel = window.getSelection(); if (sel.rangeCount && page.contains(sel.anchorNode)) saved = sel.getRangeAt(0).cloneRange(); };
@@ -395,22 +437,56 @@
     const sep = () => h("span", { class: "tsep", "aria-hidden": "true" });
     const tools = h("div", { class: "tools", role: "toolbar", "aria-label": "Text formatting" },
       tool("undo", "Undo (Ctrl+Z)", "undo"), tool("redo", "Redo (Ctrl+Y)", "redo"), sep(),
-      pick("Style", [["Normal text", "P"], ["Title", "H1"], ["Heading", "H2"], ["Subheading", "H3"], ["Quote", "BLOCKQUOTE"]], (v) => setStyle(v)), sep(),
-      pick("Font", WRITE_FONTS, (v) => run("fontName", v), "font"), sep(),
-      tool("−", "Smaller text", () => stepSize(-1)), sizeSel, tool("+", "Bigger text", () => stepSize(1)), sep(),
+      allowSize ? [pick("Style", [["Normal text", "P"], ["Title", "H1"], ["Heading", "H2"], ["Subheading", "H3"], ["Quote", "BLOCKQUOTE"]], (v) => setStyle(v)), sep(),
+        pick("Font", WRITE_FONTS, (v) => run("fontName", v), "font"), sep(),
+        tool("−", "Smaller text", () => stepSize(-1)), sizeSel, tool("+", "Bigger text", () => stepSize(1)), sep()] : null,
       tool("B", "Bold (Ctrl+B)", "bold", null, { style: "font-weight:800", state: "bold" }), tool("I", "Italic (Ctrl+I)", "italic", null, { style: "font-style:italic", state: "italic" }),
       tool("U", "Underline (Ctrl+U)", "underline", null, { style: "text-decoration:underline", state: "underline" }), tool("S", "Strikethrough", "strikeThrough", null, { style: "text-decoration:line-through", state: "strikeThrough" }),
-      colourMenu("Text colour", h("b", { class: "tA" }, "A"), "foreColor", TEXT_COLORS, false), colourMenu("Highlight", h("span", { class: "tH" }, "✎"), "hiliteColor", MARK_COLORS, true),
+      allowColor ? [colourMenu("Text colour", h("b", { class: "tA" }, "A"), "foreColor", TEXT_COLORS, false), colourMenu("Highlight", h("span", { class: "tH" }, "✎"), "hiliteColor", MARK_COLORS, true)] : null,
       tool(h("span", {}, "x", h("sup", {}, "2")), "Superscript (Ctrl+.)", "superscript", null, { state: "superscript" }), tool(h("span", {}, "x", h("sub", {}, "2")), "Subscript (Ctrl+,)", "subscript", null, { state: "subscript" }), sep(),
       tool("left", "Align left (Ctrl+Shift+L)", "justifyLeft", null, { state: "justifyLeft" }), tool("center", "Center (Ctrl+Shift+E)", "justifyCenter", null, { state: "justifyCenter" }),
       tool("right", "Align right (Ctrl+Shift+R)", "justifyRight", null, { state: "justifyRight" }), tool("justify", "Justify (Ctrl+Shift+J)", "justifyFull", null, { state: "justifyFull" }),
       h("label", { class: "tspacing", title: "Line spacing" }, icon("spacing"), pick("Line spacing", [["Line spacing", ""], ...LINE_SPACING], (v) => spacing(v))),
-      h("label", { class: "tspacing", title: "Letter spacing" }, icon("letters"), pick("Letter spacing", [["Letter spacing", ""], ...LETTER_SPACING], (v) => letters(v))), sep(),
+      allowSize ? h("label", { class: "tspacing", title: "Letter spacing" }, icon("letters"), pick("Letter spacing", [["Letter spacing", ""], ...LETTER_SPACING], (v) => letters(v))) : null, sep(),
       tool("bullets", "Bullet list (Ctrl+Shift+8)", "insertUnorderedList", null, { state: "insertUnorderedList" }), tool("numbers", "Numbered list (Ctrl+Shift+7)", "insertOrderedList", null, { state: "insertOrderedList" }),
       tool("outdent", "Decrease indent (Shift+Tab)", "outdent"), tool("indent", "Increase indent", "indent"), sep(),
-      symMenu, tool("line", "Insert a line", "insertHorizontalRule"), tool("clear", "Clear formatting", "removeFormat"));
+      allowSymbols ? symMenu : null, tool("line", "Insert a line", "insertHorizontalRule"), tool("clear", "Clear formatting", "removeFormat"));
     tools.querySelectorAll(".tspacing select").forEach((s2) => { s2.addEventListener("change", () => { s2.value = ""; }); });
-    const box = h("div", { class: "writer" }, tools, page, h("div", { class: "writer-foot" }, count));
+    // Find (Ctrl+F inside the box): search your own answer, step through the matches
+    const findIn = h("input", { class: "input find-input", type: "search", placeholder: "Find in your answer", "aria-label": "Find in your answer",
+      oninput: () => { findAt = -1; findNext(1); }, onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); findNext(e.shiftKey ? -1 : 1); } if (e.key === "Escape") { e.preventDefault(); closeFind(); } } });
+    const findCount = h("span", { class: "muted small find-count" });
+    const findBar = h("div", { class: "find-bar", hidden: true, role: "search" }, findIn,
+      h("button", { class: "tool", type: "button", title: "Previous (Shift+Enter)", "aria-label": "Previous match", onmousedown: noSteal, onclick: () => findNext(-1) }, "\u2191"),
+      h("button", { class: "tool", type: "button", title: "Next (Enter)", "aria-label": "Next match", onmousedown: noSteal, onclick: () => findNext(1) }, "\u2193"),
+      findCount, h("button", { class: "tool", type: "button", title: "Close (Esc)", "aria-label": "Close find", onclick: () => closeFind() }, "\u2715"));
+    let findAt = -1;
+    function matches() {
+      const q = findIn.value.trim().toLowerCase(); if (!q) return [];
+      const out = [], walker = document.createTreeWalker(page, NodeFilter.SHOW_TEXT); let n;
+      while ((n = walker.nextNode())) { const t = n.nodeValue.toLowerCase(); let i = t.indexOf(q); while (i >= 0) { out.push([n, i, q.length]); i = t.indexOf(q, i + q.length); } }
+      return out;
+    }
+    function findNext(dir) {
+      const m = matches();
+      if (!m.length) { findCount.textContent = findIn.value.trim() ? "Not found" : ""; return; }
+      findAt = (findAt + dir + m.length) % m.length;
+      const [n, i, len] = m[findAt], r = document.createRange(); r.setStart(n, i); r.setEnd(n, i + len);
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); keep();
+      const box = r.getBoundingClientRect(), pb = page.getBoundingClientRect();
+      if (box.top < pb.top || box.bottom > pb.bottom) page.scrollTop += box.top - pb.top - pb.height / 2;
+      findCount.textContent = `${findAt + 1} of ${m.length}`;
+    }
+    function openFind() {
+      findBar.hidden = false;
+      const sel = String(window.getSelection() || "").trim();
+      if (sel && sel.length < 40 && !sel.includes("\n")) findIn.value = sel;
+      findIn.focus(); findIn.select(); findAt = -1; if (findIn.value) findNext(1);
+    }
+    function closeFind() { findBar.hidden = true; findCount.textContent = ""; restore(); }
+    page.addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F")) { e.preventDefault(); e.stopPropagation(); openFind(); } });
+    tools.append(sep(), tool("\ud83d\udd0d", "Find in your answer (Ctrl+F)", () => openFind()));
+    const box = h("div", { class: "writer" }, tools, findBar, page, h("div", { class: "writer-foot" }, count));
     return { box, page, isEmpty: () => !page.innerText.trim(), html: () => { const d = document.createElement("div"); d.append(richClean(page.innerHTML)); return d.innerHTML.slice(0, 40000); },
       lock: () => { page.contentEditable = "false"; tools.querySelectorAll("button,select,input").forEach((el) => { el.disabled = true; }); closeMenus(); } };
   }
@@ -664,7 +740,7 @@
         h("button", { class: "btn small", onclick: () => rejoinStudent(saved) }, "Rejoin it"), " ",
         h("button", { class: "btn small ghost", onclick: () => { store.del("md-student"); home(); } }, "Forget it"))
       : null;
-    show(topbar(APP),
+    show(topbar([APP, statusChip()]),
       h("main", { class: "home" },
         h("div", { class: "home-title" },
           h("div", { class: "logo big" }, "Q"),
@@ -705,7 +781,7 @@
       h("label", { for: "code" }, "Quiz code"), code, keyRow, msg,
       h("div", { class: "row" }, btn, IN_APP ? h("button", { class: "btn ghost", type: "button", onclick: quitApp }, "Close Quiz Duel")
         : h("button", { class: "btn ghost", type: "button", onclick: home }, "Back")));
-    show(topbar(APP, IN_APP ? "Student \u00b7 Quiz Duel app" : "Student"), h("main", { class: "narrow" }, card(h("h2", {}, "Join a quiz"), form)));
+    show(topbar([APP, statusChip()], IN_APP ? "Student \u00b7 Quiz Duel app" : "Student"), h("main", { class: "narrow" }, card(h("h2", {}, "Join a quiz"), form)));
     (name.value ? (email.value ? (code.value ? btn : code) : email) : name).focus();
 
     async function go() {
@@ -762,7 +838,7 @@
     Q.continued = true;
     store.set("md-student", { state: "quiz", code: c.code, name: c.name, email: c.email, sid: c.sid, i: Q.i, them: 0, youRounds: 0, themRounds: 0, started: Q.started, violations: [], results: Q.results });
     const done = Q.results.filter(Boolean).length;
-    show(topbar(APP, c.name), h("main", { class: "narrow" }, card(
+    show(topbar([APP, statusChip(c.code)], c.name), h("main", { class: "narrow" }, card(
       h("h2", {}, "Welcome back"),
       h("p", {}, `Your teacher let you continue. ${done} of ${Q.total} questions are already handed in.`),
       h("button", { class: "btn big", onclick: () => { wipeClipboard(); c.send("start"); Q.resume(); } }, "Continue the quiz"))));
@@ -783,7 +859,7 @@
     Q.continued = true;
     store.set("md-student", { state: "quiz", code: c.code, name: c.name, email: c.email, sid: c.sid, i: 0, them: 0, youRounds: 0, themRounds: 0, started: Date.now(), violations: [], results: [], drafts: Q.drafts, prev: Q.prev });
     const had = Object.keys(Q.prev).length;
-    show(topbar(APP, c.name), h("main", { class: "narrow" }, card(
+    show(topbar([APP, statusChip(c.code)], c.name), h("main", { class: "narrow" }, card(
       h("h2", {}, "Welcome back \u2014 you can change your answers"),
       h("p", {}, `Your teacher let you go through the quiz again. ${had ? `Your earlier answers (${had}) are filled in or shown on each question \u2014 keep them or change them, then hand each one in.` : "Start from question 1."}`),
       h("button", { class: "btn big", onclick: () => { wipeClipboard(); c.send("start"); Q.resume(); } }, "Start"))));
@@ -809,7 +885,7 @@
     const onBlur = () => { left = true; };
     const launch = () => { left = false; window.addEventListener("blur", onBlur, { once: true }); location.href = link;
       setTimeout(() => { window.removeEventListener("blur", onBlur); if (!left) help.classList.add("flash"); }, 3000); };
-    show(topbar(APP, c.name), h("main", { class: "narrow" }, card(
+    show(topbar([APP, statusChip(c.code)], c.name), h("main", { class: "narrow" }, card(
       h("h2", {}, "This quiz needs the Quiz Duel app"),
       h("p", {}, secLevel(S.quiz ? S.quiz.settings : null) === "high" || !(S.quiz && S.quiz.settings.closeGames)
         ? "Your teacher set this quiz to high security, so it runs in the Quiz Duel app, which locks the computer while you work."
@@ -842,7 +918,7 @@
       rules.push("Need to leave? Press Esc — your teacher will let you out.");
     }
     if (st.rival) rules.push(`You're racing ${M.RIVALS[st.rival].name}. Be quick and careful!`);
-    show(topbar(APP, S.client.name), h("main", { class: "narrow" }, card(
+    show(topbar([APP, statusChip(S.client.code)], S.client.name), h("main", { class: "narrow" }, card(
       h("h2", {}, `Hi ${S.client.name}!`),
       h("p", { class: "lead" }, `${S.quiz.title}  —  ${S.quiz.problems.length} questions`),
       h("ul", { class: "rules" }, rules.map((r) => h("li", {}, r))), appsEl, mon, start)));
@@ -876,7 +952,7 @@
   }
 
   async function rejoinStudent(saved) {
-    show(topbar(APP, saved.name), h("main", { class: "narrow" }, card(h("h2", {}, "Rejoining..."), h("p", { class: "muted" }, `Looking for quiz ${saved.code}.`))));
+    show(topbar([APP, statusChip(saved.code)], saved.name), h("main", { class: "narrow" }, card(h("h2", {}, "Rejoining..."), h("p", { class: "muted" }, `Looking for quiz ${saved.code}.`))));
     const client = new Client(saved.code, saved.name, saved.sid, saved.email || "");
     client.resending = saved.state === "sending";
     try {
@@ -887,12 +963,12 @@
       Q.restore(saved);
       client.current = Q.i;
       client.send("join", { total: S.quiz.problems.length, rejoin: true, email: saved.email || "" });
-      show(topbar(APP, saved.name), h("main", { class: "narrow" }, card(
+      show(topbar([APP, statusChip(saved.code)], saved.name), h("main", { class: "narrow" }, card(
         h("h2", {}, "Back in your quiz"), h("p", {}, `You're on question ${Math.max(1, Q.i)} of ${S.quiz.problems.length}. Your teacher will be told you reloaded the page.`),
         h("button", { class: "btn big", onclick: () => { wipeClipboard(); Q.resume(); } }, "Continue"))));
     } catch (e) {
       if (["done", "elsewhere", "badkey"].includes(e.message)) { store.del("md-student"); studentJoin({ code: saved.code, name: saved.name, email: saved.email }); return; }
-      show(topbar(APP, saved.name), h("main", { class: "narrow" }, card(
+      show(topbar([APP, statusChip(saved.code)], saved.name), h("main", { class: "narrow" }, card(
         h("h2", {}, "Couldn't rejoin"), h("p", {}, "The quiz isn't reachable right now. Your answers are saved on this computer. Make sure your teacher's quiz page is open and you're online, then try again."),
         h("div", { class: "row" }, h("button", { class: "btn", onclick: () => rejoinStudent(saved) }, "Try again"),
           h("button", { class: "btn ghost", onclick: home }, "Home")))));
@@ -995,6 +1071,8 @@
     if (!SECURITY[B.security]) B.security = "medium";
     if (B.closeApps === undefined) B.closeApps = 1;
     if (B.closeGames === undefined) B.closeGames = false;
+    if (!B.writing) B.writing = { color: true, size: true, any: true, nums: true, langs: ["en"] };
+    if (!B.limit) B.limit = { on: false, min: 50, mode: "each", trick: false, shown: 60 };
     const SEC_HELP = {
       low: "Any browser. Nothing is locked; your log shows when a student leaves the quiz page.",
       medium: "Any browser. Full screen, no copy/paste, one screen only. The quiz freezes if a student leaves it, until you unlock them.",
@@ -1016,6 +1094,38 @@
     const secSel = h("select", { class: "input", "aria-label": "Security", onchange: (e) => { B.security = e.target.value; secHelp.textContent = SEC_HELP[B.security]; closeRow.hidden = B.security !== "high"; paintGames(); } },
       Object.entries(SECURITY).map(([v, t]) => h("option", { value: v, selected: B.security === v }, t)));
     if (B.period === undefined) B.period = "";
+    // ---- writing box rules
+    const W = B.writing;
+    const wColor = h("input", { type: "checkbox", checked: W.color, "aria-label": "Students may change text colour", onchange: (e) => { W.color = e.target.checked; } });
+    const wSize = h("input", { type: "checkbox", checked: W.size, "aria-label": "Students may change text size and font", onchange: (e) => { W.size = e.target.checked; } });
+    const langBoxes = h("div", { class: "checks indent lang-boxes" }, LANGS.map(([id, name]) => h("label", { class: "check" },
+      h("input", { type: "checkbox", checked: W.langs.includes(id), "aria-label": "Language: " + name, onchange: (e) => { W.langs = LANGS.map((l) => l[0]).filter((x) => x === id ? e.target.checked : W.langs.includes(x)); if (!W.langs.length) { W.langs = ["en"]; paintLang(); } } }), " " + name)));
+    const wNums = h("input", { type: "checkbox", checked: W.nums, "aria-label": "Numbers and symbols", onchange: (e) => { W.nums = e.target.checked; } });
+    const langMode = h("select", { class: "input", "aria-label": "Languages students may type", onchange: (e) => { W.any = e.target.value === "any"; paintLang(); } },
+      h("option", { value: "any", selected: W.any }, "Any language, numbers and symbols"), h("option", { value: "some", selected: !W.any }, "Only the languages I pick"));
+    const langPick = h("div", { class: "indent" }, langBoxes, h("label", { class: "check" }, wNums, " Numbers and symbols (0-9, + = % \u00b0 \u00d7 ...)"),
+      h("p", { class: "hint" }, "If you pick more than one language, students get a switch at the top of the quiz to change between them. Letters from other languages can't be typed."));
+    function paintLang() { langPick.hidden = W.any; langBoxes.querySelectorAll("input").forEach((el, i) => { el.checked = W.langs.includes(LANGS[i][0]); }); }
+    paintLang();
+    // ---- time limit (+ tricky timer)
+    const L = B.limit;
+    const limOn = h("input", { type: "checkbox", checked: L.on, "aria-label": "Time limit", onchange: (e) => { L.on = e.target.checked; paintLim(); } });
+    const limMin = h("input", { class: "input small-num", type: "number", min: 1, max: 300, value: L.min, "aria-label": "Time limit in minutes", oninput: (e) => { L.min = Math.max(1, Math.min(300, +e.target.value || 1)); paintLim(); } });
+    const limMode = h("select", { class: "input", "aria-label": "When the clock starts", onchange: (e) => { L.mode = e.target.value; } },
+      h("option", { value: "each", selected: L.mode === "each" }, "for each student, from when they press Start"), h("option", { value: "all", selected: L.mode === "all" }, "the same end time for everyone, from when you press Create"));
+    const trickOn = h("input", { type: "checkbox", checked: L.trick, "aria-label": "Show a different time", onchange: (e) => { L.trick = e.target.checked; paintLim(); } });
+    const trickShown = h("input", { class: "input small-num", type: "number", min: 1, max: 600, value: L.shown, "aria-label": "Time students see, in minutes", oninput: (e) => { L.shown = Math.max(1, Math.min(600, +e.target.value || 1)); paintLim(); } });
+    const trickHint = h("p", { class: "hint" });
+    const limBox = h("div", { class: "indent" },
+      h("div", { class: "check wrapline" }, limMin, "minutes, ", limMode),
+      h("p", { class: "hint" }, "Students see the time left at the top. They and you get reminders at 10, 5, 3 and 1 minutes left. When it reaches 0, the quiz is handed in by itself."),
+      h("div", { class: "check wrapline" }, h("label", { class: "check" }, trickOn, " Tricky timer: students see"), trickShown, "minutes"), trickHint);
+    function paintLim() {
+      limBox.hidden = !L.on; trickShown.disabled = !L.trick;
+      const speed = L.shown / L.min;
+      trickHint.textContent = L.trick ? `Their clock starts at ${L.shown}:00 and runs ${speed >= 1 ? speed.toFixed(2) + "\u00d7 faster" : (1 / speed).toFixed(2) + "\u00d7 slower"} than a real clock, so it reaches 0 exactly when the real ${L.min} minutes are up. Nobody is cut off while their clock still shows time.` : "";
+    }
+    paintLim();
     const period = h("input", { class: "input", value: B.period, maxlength: 30, placeholder: "e.g. Period 3", "aria-label": "Class or period", oninput: (e) => { B.period = e.target.value; } });
 
     // my quizzes (any subject)
@@ -1087,7 +1197,9 @@
         refs.push({ title: (r.title || u.hostname).slice(0, 40), url: u.href });
       }
       const settings = { refs, refWin: !!B.refWin, refNotes: (B.refNotes || "").trim().slice(0, 6000), rival: B.form.on ? 0 : B.rival, form: !!B.form.on, perPage: B.form.per, countdown: B.cd, breakEvery: B.brk.on ? B.brk.every : 0, breakSecs: B.brk.secs,
-        music: B.music.on ? M.Music.GROUPS.map(([g]) => g).filter((g) => B.music.groups[g] !== false) : [], show_solutions: solo ? true : !!B.sol, security: solo ? "low" : B.security, closeApps: B.security === "high" ? B.closeApps : 0, closeGames: !solo && !!B.closeGames };
+        music: B.music.on ? M.Music.GROUPS.map(([g]) => g).filter((g) => B.music.groups[g] !== false) : [], show_solutions: solo ? true : !!B.sol, security: solo ? "low" : B.security, closeApps: B.security === "high" ? B.closeApps : 0, closeGames: !solo && !!B.closeGames,
+        writing: { color: !!B.writing.color, size: !!B.writing.size, any: !!B.writing.any, nums: !!B.writing.nums, langs: B.writing.langs.slice() },
+        limit: B.limit.on && !solo ? { min: B.limit.min, mode: B.limit.mode, end: B.limit.mode === "all" ? Date.now() + B.limit.min * 60000 : 0, shown: B.limit.trick ? B.limit.shown : B.limit.min } : null };
       if (previewOnly === true) { preview((B.title || "").trim() || ttl, settings, probs, () => builder(false)); return; }
       if (solo) {
         S.client = null;
@@ -1101,7 +1213,7 @@
       const title = (B.title || "").trim() || ttl;
       // students get the questions (and the choices) only - never the answers or solutions
       const studentView = probs.map((p) => { const d = { topic: p.topic, q: p.q, kind: p.kind, base: p.base }; if (p.graph) d.graph = p.graph; if (p.options) d.options = p.options; if (p.tools) d.tools = p.tools; return d; });
-      const live = { code, pin, title, period: (B.period || "").trim().slice(0, 30), made: Date.now(), total: probs.length, show: settings.show_solutions, security: settings.security, closeApps: settings.closeApps, closeGames: settings.closeGames,
+      const live = { code, pin, title, period: (B.period || "").trim().slice(0, 30), made: Date.now(), total: probs.length, show: settings.show_solutions, security: settings.security, closeApps: settings.closeApps, closeGames: settings.closeGames, limit: settings.limit,
         payload: seal(code, { title, settings, problems: studentView }), full: probs.map(M.encProb), token: uid(), graded: {}, answers: {}, students: {}, log: [], seen: [], keys: {} };
       const run = Runners.add(live);
       dashboard(run);
@@ -1131,6 +1243,11 @@
           h("label", { class: "check" }, refWin, "Also let students open a reference in its own window (weaker: other websites and sound can't be blocked there)"),
           h("label", { class: "field" }, h("span", {}, "Reference notes (shown next to the pages)"), refNotes),
           solo ? null : h("label", { class: "check" }, sol, "Show the answer + explanation after each question"),
+          h("p", { class: "label" }, "Writing box (written answers)"),
+          h("label", { class: "check" }, wColor, " Students may change text colour and highlight"),
+          h("label", { class: "check" }, wSize, " Students may change text size, font and headings"),
+          h("label", { class: "field" }, h("span", {}, "Languages students may type"), langMode), langPick,
+          solo ? null : h("label", { class: "check" }, limOn, " ", h("b", {}, "Time limit")), solo ? null : limBox,
           solo ? null : h("label", { class: "field" }, h("span", {}, "Security"), secSel), solo ? null : secHelp, solo ? null : closeRow, solo ? null : gamesRow)),
       msg,
       h("div", { class: "row" }, h("button", { class: "btn big", onclick: () => build(false) }, solo ? "Start practice" : "Create quiz & get code"),
@@ -1271,6 +1388,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
   // After the end-code part, optional extras (all covered by the check letters, so they can't be removed):
   //   -G / -M / -H / -GM / -GH   anti-game, Medium or High security (none = Low)
   //   -Sxx                        which focus music the teacher allows (a bit for each kind of music; S00 = none)
+  //   -Tnn                        tricky timer: students see nn minutes for each focus round (it still ends on the real time)
   const FOCUS_ALL_MUSIC = () => (1 << M.Music.GROUPS.length) - 1;
   function focusMusicBits(groups) { return M.Music.GROUPS.reduce((b, [g], i) => b | ((groups || []).includes(g) ? 1 << i : 0), 0); }
   function focusMusicGroups(bits) { return M.Music.GROUPS.filter((_, i) => bits & (1 << i)).map(([g]) => g); }
@@ -1278,20 +1396,38 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     const nums = FOCUS_KEYS.map((k) => r[k]).join("-");
     const flags = (r.games ? "G" : "") + (r.sec === "high" ? "H" : r.sec === "medium" ? "M" : "");
     const bits = Array.isArray(r.music) ? focusMusicBits(r.music) : FOCUS_ALL_MUSIC();
-    const body = nums + "-" + focusPinHash(r.pin, nums) + (flags ? "-" + flags : "") + (bits !== FOCUS_ALL_MUSIC() ? "-S" + bits.toString(16).toUpperCase().padStart(2, "0") : "");
+    const trick = r.trick && r.shown && r.shown !== r.focus ? "-T" + r.shown : "";
+    const body = nums + "-" + focusPinHash(r.pin, nums) + (flags ? "-" + flags : "") + (bits !== FOCUS_ALL_MUSIC() ? "-S" + bits.toString(16).toUpperCase().padStart(2, "0") : "") + trick;
     return body + "-" + focusCheck(body);
   }
   function focusParse(text) {
-    const m = /^(\d{1,3})-(\d{1,2})-(\d{1,2})-(\d{1,2})-(\d{2,3})-([0-9A-F]{4})(?:-(G?[MH]?))?(?:-S([0-9A-F]{2}))?-([0-9A-F]{3})$/.exec(String(text || "").toUpperCase().replace(/[^0-9A-Z-]/g, ""));
+    const m = /^(\d{1,3})-(\d{1,2})-(\d{1,2})-(\d{1,2})-(\d{2,3})-([0-9A-F]{4})(?:-(G?[MH]?))?(?:-S([0-9A-F]{2}))?(?:-T(\d{1,3}))?-([0-9A-F]{3})$/.exec(String(text || "").toUpperCase().replace(/[^0-9A-Z-]/g, ""));
     if (!m) return null;
-    const body = m.slice(1, 7).join("-") + (m[7] ? "-" + m[7] : "") + (m[8] ? "-S" + m[8] : "");
-    if (focusCheck(body) !== m[9]) return null;
+    const body = m.slice(1, 7).join("-") + (m[7] ? "-" + m[7] : "") + (m[8] ? "-S" + m[8] : "") + (m[9] ? "-T" + m[9] : "");
+    if (focusCheck(body) !== m[10]) return null;
     const r = {}; FOCUS_KEYS.forEach((k, i) => { r[k] = +m[i + 1]; });
     r.pinHash = m[6]; r.body = m.slice(1, 6).join("-");
     const flags = m[7] || "";
     r.games = flags.includes("G"); r.sec = flags.includes("H") ? "high" : flags.includes("M") ? "medium" : "low";
     r.music = focusMusicGroups(m[8] ? parseInt(m[8], 16) : FOCUS_ALL_MUSIC());
+    r.shown = m[9] ? Math.max(1, Math.min(240, +m[9])) : r.focus; r.trick = r.shown !== r.focus;
     return FOCUS_KEYS.every((k) => r[k] >= FOCUS_LIMITS[k][0] && r[k] <= FOCUS_LIMITS[k][1]) ? r : null;
+  }
+  const focusRoomCode = (code) => "F" + cyrb53("qd-room:" + String(code || "").toUpperCase()).slice(-7).toUpperCase();
+  const speedText = (real, shown) => {
+    if (!real || !shown || real === shown) return "";
+    const x = shown / real;
+    return x > 1 ? `The shown clock runs ${x.toFixed(2)}\u00d7 faster than real time.` : `The shown clock runs ${(1 / x).toFixed(2)}\u00d7 slower than real time.`;
+  };
+  // tricky timer fields: real focus time comes from the focus fields; this is the time the student SEES
+  function trickFields(r, onchange) {
+    const hint = h("span", { class: "muted small" });
+    const paintHint = () => { hint.textContent = r.trick ? (speedText(r.focus, r.shown) || "Same as the real time.") + " It reaches 0 exactly when the real round ends." : ""; };
+    const shown = h("input", { type: "number", class: "input small-num", min: 1, max: 240, value: r.shown || r.focus, disabled: !r.trick, "aria-label": "Focus time shown, in minutes",
+      onchange: (e) => { r.shown = Math.max(1, Math.min(240, Math.round(+e.target.value) || r.focus)); e.target.value = r.shown; paintHint(); onchange(); } });
+    const box = h("input", { type: "checkbox", checked: !!r.trick, "aria-label": "Tricky focus timer", onchange: (e) => { r.trick = e.target.checked; shown.disabled = !r.trick; if (r.trick && !r.shown) r.shown = r.focus; paintHint(); onchange(); } });
+    paintHint();
+    return { el: h("div", { class: "check wrapline" }, box, " ", h("b", {}, "Tricky timer"), ": show ", shown, " minutes for each focus round ", hint), refresh: paintHint };
   }
   const FOCUS_SEC_HELP = {
     low: "Leaving the session page is counted and shown at the end.",
@@ -1319,11 +1455,12 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     const codeEl = h("p", { class: "bigcode focus-code" }), linkEl = h("p", { class: "mono small focus-link" }), msg = h("span", { class: "muted small" });
     const paint = () => { store.set("qd-focus-teacher", r); codeEl.textContent = focusCode(r); linkEl.textContent = `${BASE_URL}?focus=${focusCode(r)}`; msg.textContent = ""; };
     const copy = (text) => { (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(() => { msg.textContent = "Copied."; }, () => { msg.textContent = "Couldn't copy \u2014 select it and copy by hand."; }); };
-    const fields = focusFields(r, paint);
+    const fields = focusFields(r, () => { trick.refresh(); paint(); });
+    const trick = trickFields(r, paint);
     show(topbar(APP, "Teacher \u2014 focus session"), h("main", { class: "narrow" },
       card(h("h2", {}, "Focus session rules"),
         h("p", { class: "muted" }, "Students study against a timer: focus, short break, repeat. Set the rules, then share the code or the link. A student who uses your code can't change the rules."),
-        fields.el,
+        fields.el, trick.el,
         h("div", { class: "check wrapline" }, h("b", {}, "Teacher end code"), pinIn, h("span", { class: "muted" }, "6 digits. Keep it secret.")),
         h("p", { class: "hint" }, "Students on your rules can't end the session themselves. It stops after the last round, or when you type this code on their screen."),
         h("label", { class: "field" }, h("span", {}, "Security"),
@@ -1339,15 +1476,93 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         h("p", { class: "hint" }, "Students get one playlist of all the music you tick, playing one track after another and starting again at the end. They can also pick a single track, or turn it off.")),
       card(h("h3", {}, "Share with students"), h("p", { class: "label" }, "Focus code"), codeEl, h("p", { class: "label" }, "Or send this link"), linkEl,
         h("div", { class: "row" }, h("button", { class: "btn", onclick: () => copy(focusCode(r)) }, "Copy the code"), h("button", { class: "btn ghost", onclick: () => copy(linkEl.textContent) }, "Copy the link"), msg),
-        h("div", { class: "row" }, h("button", { class: "btn ghost", onclick: () => focusSetup(focusCode(r)) }, "Try it yourself"), h("button", { class: "btn ghost", onclick: () => builder(false) }, "Back")))));
+        h("div", { class: "row" }, h("button", { class: "btn", onclick: () => focusRoom(focusCode(r)) }, "Open the live focus room"),
+          h("button", { class: "btn ghost", onclick: () => focusSetup(focusCode(r)) }, "Try it yourself"), h("button", { class: "btn ghost", onclick: () => builder(false) }, "Back")),
+        h("p", { class: "hint" }, "In the live room you see who is focusing, and you're told when a student pauses or leaves and for how long. Keep it open while they work."))));
     paint();
+  }
+  // teacher: the live focus room. Students on this focus code report in; the teacher sees who is focusing,
+  // and is told when someone pauses or leaves the session, and for how long.
+  let FocusRoom = null;
+  function focusRoom(code) {
+    if (FocusRoom && FocusRoom.code !== code) { FocusRoom.host.stop(); FocusRoom = null; }
+    const saved = store.get("qd-focus-room");
+    const R = FocusRoom || { code, students: saved && saved.code === code ? saved.students : {}, log: saved && saved.code === code ? saved.log : [] };
+    const rules = focusParse(code);
+    const save = () => store.set("qd-focus-room", { code, students: R.students, log: R.log.slice(-300) });
+    const dur = (secs) => secs < 60 ? `${secs} second${secs === 1 ? "" : "s"}` : clock(secs) + " (min:sec)";
+    const log = (text, loud) => {
+      R.log.push([Date.now(), text]); save(); paintLog();
+      if (loud) timeToast(text);
+    };
+    const statusChipEl = h("span", { class: "pill warn" }, "Connecting...");
+    const tbody = h("tbody"), logEl = h("div", { class: "log" });
+    function paintLog() { setKids(logEl, R.log.slice(-200).reverse().map(([t, x]) => h("p", { class: x.startsWith("!!") ? "bad" : "" }, h("span", { class: "muted" }, fmtTime(t, true) + "  "), x.replace(/^!! /, "")))); }
+    function paintTable() {
+      const rows = Object.values(R.students).sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+      setKids(tbody, rows.length ? rows.map((s) => {
+        const now = Date.now();
+        let state = s.state;
+        if (s.state === "paused") state = `Paused ${clock((now - s.since) / 1000)}`;
+        else if (s.state === "away") state = `Left the session ${clock((now - s.since) / 1000)}`;
+        else if (s.state !== "done" && now - s.last > 25000) state = "Disconnected";
+        const cls = /Paused|Left|Disconnected/.test(state) ? "leave" : s.state === "done" ? "done" : "";
+        return h("tr", { class: cls }, h("td", { class: "name" }, s.name), h("td", {}, state), h("td", { class: "num" }, `${s.round || 0}/${s.rounds || "?"}`),
+          h("td", { class: "num" }, String(s.pauses || 0)), h("td", { class: "num" }, clock(s.pausedSecs || 0)),
+          h("td", { class: "num" }, String(s.aways || 0)), h("td", { class: "num" }, clock(s.awaySecs || 0)),
+          h("td", { class: "num" }, s.started ? fmtTime(s.started) : "\u2013"), h("td", { class: "num muted", title: Math.round((Date.now() - s.last) / 1000) + "s ago" }, s.last ? fmtTime(s.last) : "\u2013"));
+      }) : [h("tr", {}, h("td", { colspan: 9, class: "muted" }, "No one yet. Students type your focus code, then their name, and start focusing."))]);
+    }
+    function apply(ev) {
+      const s = R.students[ev.sid] || (R.students[ev.sid] = { name: String(ev.name || "Student").slice(0, 40), state: "focusing", pauses: 0, pausedSecs: 0, aways: 0, awaySecs: 0 });
+      s.last = Date.now();
+      if (typeof ev.round === "number") { s.round = ev.round; s.rounds = ev.rounds; }
+      const n = s.name, t = ev.type;
+      if (t === "fstart") { s.state = "focusing"; s.started = s.started || ev.t; log(`${n} started focusing` + (ev.goal ? ` on "${String(ev.goal).slice(0, 80)}".` : ".")); }
+      else if (t === "fpause") { s.state = "paused"; s.since = ev.t; s.pauses++; log(`!! ${n} PAUSED at ${fmtTime(ev.t)} (round ${ev.round}, pause ${ev.pausesUsed}).`, true); }
+      else if (t === "fresume") { s.state = "focusing"; s.pausedSecs += ev.secs || 0; log(`${n} is back after pausing for ${dur(ev.secs || 0)} (${fmtTime(ev.since)}\u2013${fmtTime(ev.t)})${ev.auto ? " \u2014 the pause ran out" : ""}.`, true); }
+      else if (t === "faway") { s.state = "away"; s.since = ev.t; s.aways++; log(`!! ${n} LEFT the focus session at ${fmtTime(ev.t)}.`, true); }
+      else if (t === "fback") {
+        if (ev.why === "reload") { s.state = "focusing"; log(`!! ${n} reloaded the focus session page.`, true); }
+        else { s.state = "focusing"; s.awaySecs += ev.secs || 0; log(`${n} came back after ${dur(ev.secs || 0)} away (${fmtTime(ev.since)}\u2013${fmtTime(ev.t)}).`, true); }
+      }
+      else if (t === "fround") { if (s.state !== "paused" && s.state !== "away") s.state = ev.phase === "break" ? "on a break" : "focusing"; }
+      else if (t === "fend") { s.state = "done"; log(`${n} ${ev.early ? "ended the session early" : "finished the session"}: ${Math.round((ev.focused || 0) / 60)} min focused, ${ev.pausesUsed} pause${ev.pausesUsed === 1 ? "" : "s"} (${clock(s.pausedSecs)}), left ${ev.left} time${ev.left === 1 ? "" : "s"}.`, true); }
+      save(); paintTable();
+      return null;
+    }
+    if (!FocusRoom) {
+      R.host = new Host(focusRoomCode(code), "", { focus: true }, { event: (ev) => R.apply(ev), admit: () => ({ ok: true }),
+        status: (st) => { R.status = st; if (R.paintStatus) R.paintStatus(); } });
+      FocusRoom = R;
+    }
+    R.apply = apply;
+    R.paintStatus = () => { statusChipEl.textContent = R.status === "online" ? "Live \u2014 students report in" : R.status === "error" ? "Can't reach the connection service" : "Connecting..."; statusChipEl.className = "pill " + (R.status === "online" ? "good" : R.status === "error" ? "bad" : "warn"); };
+    show(topbar([APP, statusChip()], "Live focus room"), h("main", { class: "wide" },
+      card(h("div", { class: "row spread" }, h("h2", {}, "Live focus room"), statusChipEl),
+        h("p", { class: "muted" }, "Focus code: ", h("b", { class: "mono" }, code),
+          rules ? ` \u00b7 ${rules.rounds} \u00d7 ${rules.focus} min focus, ${rules.brk} min breaks, ${rules.pauses} pause${rules.pauses === 1 ? "" : "s"} of up to ${clock(rules.pauseSecs)}` + (rules.trick ? ` \u00b7 tricky timer: students see ${rules.shown} min` : "") : ""),
+        h("p", { class: "hint" }, "Keep this page open. You're told (with a sound) when a student pauses or leaves the session, and how long they were gone."),
+        h("div", { class: "table-wrap" }, h("table", { class: "dash" }, h("thead", {}, h("tr", {}, ["Student", "Now", "Round", "Pauses", "Paused for", "Left", "Away for", "Started", "Last seen"].map((x) => h("th", {}, x)))), tbody)),
+        h("div", { class: "row" }, h("button", { class: "btn ghost", onclick: (e) => {
+          const b = e.currentTarget;
+          if (Object.keys(R.students).length && !b.dataset.armed) { b.dataset.armed = "1"; b.textContent = "Press again to clear everyone"; later(4000, () => { delete b.dataset.armed; b.textContent = "Clear the room"; }); return; }
+          R.students = {}; R.log = []; save(); paintTable(); paintLog(); b.textContent = "Clear the room"; delete b.dataset.armed;
+        } }, "Clear the room"),
+          h("button", { class: "btn ghost", onclick: () => focusTeacher() }, "Back"))),
+      card(h("h3", {}, "What happened"), logEl)));
+    R.paintStatus(); paintTable(); paintLog();
+    every(1000, paintTable);
   }
   // student: start a session (with a teacher's code the rules are fixed)
   function focusSetup(prefill, prefillMine) {
     if (prefillMine) store.set("qd-focus-mine", Object.assign({}, FOCUS_DEFAULT, prefillMine));
     const r = Object.assign({}, FOCUS_DEFAULT, store.get("qd-focus-mine") || {});
     let locked = false;
-    const fields = focusFields(r, () => store.set("qd-focus-mine", r));
+    const fields = focusFields(r, () => { store.set("qd-focus-mine", r); trick.refresh(); });
+    const trick = trickFields(r, () => store.set("qd-focus-mine", r));
+    const nameIn = h("input", { id: "focus-name", class: "input", maxlength: 40, autocomplete: "off", value: (store.get("qd-me") || {}).name || "", placeholder: "First and last name" });
+    const nameRow = h("label", { class: "field", hidden: true }, h("span", {}, "Your name (your teacher sees it in the live focus room)"), nameIn);
     const note = h("p", { class: "msg" });
     const code = h("input", { id: "focus-code", class: "input mono", autocomplete: "off", maxlength: 40, placeholder: "25-5-4-3-60-ABC", value: prefill || "", oninput: () => check() });
     const goal = h("input", { id: "focus-goal", class: "input", maxlength: 80, autocomplete: "off", placeholder: "For example: math homework, pages 40-42" });
@@ -1358,27 +1573,30 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       const typed = code.value.trim(), got = focusParse(typed);
       locked = !!got;
       if (got) {
-        fields.set(got, true); games.checked = got.games; games.disabled = true; note.className = "msg good";
+        fields.set(got, true); games.checked = got.games; games.disabled = true; note.className = "msg good"; trick.el.hidden = true; nameRow.hidden = false;
         const music = got.music.length ? M.Music.GROUPS.filter(([g]) => got.music.includes(g)).map(([, l]) => l).join(", ") : "none";
         note.textContent = `Your teacher's rules are set. Security: ${SECURITY[got.sec]}${got.games ? " + anti-game" : ""}. Music: ${music}.` + (!IN_APP && (got.games || got.sec === "high") ? " This session opens in the Quiz Duel app." : "");
       }
       else { fields.set(Object.assign({}, FOCUS_DEFAULT, store.get("qd-focus-mine") || {}), false); note.textContent = typed ? "That focus code isn't right. Check it, or clear the box to pick your own times." : ""; note.className = "msg bad";
-        games.disabled = false; games.checked = !!(store.get("qd-focus-mine") || {}).games; }
+        games.disabled = false; games.checked = !!(store.get("qd-focus-mine") || {}).games; trick.el.hidden = false; nameRow.hidden = true; }
       gamesNote.textContent = IN_APP ? "" : " (opens in the Quiz Duel app)";
     }
     const start = () => {
       if (code.value.trim() && !locked) { code.focus(); return; }
+      if (locked && !nameIn.value.trim()) { note.className = "msg bad"; note.textContent = "Type your name so your teacher can see you."; nameIn.focus(); return; }
+      if (locked) store.set("qd-me", Object.assign({}, store.get("qd-me") || {}, { name: nameIn.value.trim() }));
       const got = locked ? focusParse(code.value.trim()) : null;
       const cfg = { focus: r.focus * 60, brk: r.brk * 60, rounds: r.rounds, pauses: r.pauses, pauseSecs: r.pauseSecs, goal: goal.value.trim(), locked, code: locked ? code.value.trim().toUpperCase() : "",
         pinHash: got ? got.pinHash : "", body: got ? got.body : "", games: got ? got.games : games.checked,
-        sec: got ? got.sec : "low", music: got ? got.music : M.Music.GROUPS.map(([g]) => g) };
+        sec: got ? got.sec : "low", music: got ? got.music : M.Music.GROUPS.map(([g]) => g),
+        shown: (got ? (got.trick ? got.shown : got.focus) : (r.trick && r.shown ? r.shown : r.focus)) * 60, name: locked ? nameIn.value.trim() : "" };
       if ((cfg.games || cfg.sec === "high") && !IN_APP) { focusNeedApp(cfg); return; }
       focusRun(cfg);
     };
-    show(topbar(APP, "Focus session"), h("main", { class: "narrow" }, card(h("h2", {}, "Focus session"),
+    show(topbar([APP, statusChip()], "Focus session"), h("main", { class: "narrow" }, card(h("h2", {}, "Focus session"),
       h("p", { class: "muted" }, "A study timer: focus with nothing else on screen, take a short break, repeat. It stops by itself after the last round."),
-      h("label", { class: "field" }, h("span", {}, "Focus code from your teacher (leave empty to pick your own times)"), code), note,
-      fields.el,
+      h("label", { class: "field" }, h("span", {}, "Focus code from your teacher (leave empty to pick your own times)"), code), note, nameRow,
+      fields.el, trick.el,
       h("label", { class: "field" }, h("span", {}, "What are you working on? (optional)"), goal),
       h("label", { class: "check" }, games, " ", h("b", {}, "Anti-game"), ": no games or game websites until the session ends", gamesNote),
       h("div", { class: "row" }, h("button", { class: "btn big", onclick: start }, "Start focusing"), h("button", { class: "btn ghost", onclick: home }, "Back")))));
@@ -1388,7 +1606,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
   function focusNeedApp(cfg) {
     const mine = [cfg.focus / 60, cfg.brk / 60, cfg.rounds, cfg.pauses, cfg.pauseSecs].join("-");
     const link = "quizduel://focus?" + (cfg.locked ? "focus=" + encodeURIComponent(cfg.code) : "mine=" + mine + "-G");
-    show(topbar(APP, "Focus session"), h("main", { class: "narrow" }, card(
+    show(topbar([APP, statusChip()], "Focus session"), h("main", { class: "narrow" }, card(
       h("h2", {}, cfg.sec === "high" ? "This focus session runs in the Quiz Duel app" : "Anti-game sessions run in the Quiz Duel app"),
       h("p", {}, cfg.sec === "high" ? "Your teacher set this session to High security, so it runs in the Quiz Duel app, which locks the computer until the session ends."
         : "A website can't stop games, so this session runs in the Quiz Duel app. It blocks game websites and closes games like Roblox until the session ends."),
@@ -1406,6 +1624,19 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     // a session on the teacher's rules is remembered, so reloading the page doesn't get a student out of it
     const remember = () => { if (cfg.locked) store.set("qd-focus-run", { cfg, st }); };
     const el = document.documentElement;
+    // the teacher's live focus room (only for sessions on a teacher's code). If the teacher hasn't opened it, keep trying quietly.
+    let room = null, roomTry = null;
+    const tell = (type, data) => { if (room) room.send(type, Object.assign({ phase: st.phase, round: st.round, rounds: cfg.rounds, pausesUsed: st.pausesUsed, left: st.left, focused: Math.round(st.focused) }, data || {})); };
+    if (cfg.locked && cfg.name) {
+      cfg.sid = cfg.sid || uid();
+      const tryRoom = () => {
+        if (!Focus.active || room) return;
+        const c = new Client(focusRoomCode(cfg.code), cfg.name, cfg.sid, "");
+        c.connect().then(() => { if (!Focus.active) { c.close(); return; } room = c; tell(resumed ? "fback" : "fstart", { goal: cfg.goal, why: resumed ? "reload" : "" }); clearInterval(roomTry); },
+          () => { c.close(); });
+      };
+      roomTry = setInterval(tryRoom, 30000); setTimeout(tryRoom, 300);
+    }
     if (!IN_APP && el.requestFullscreen && !document.fullscreenElement) el.requestFullscreen().catch(() => {});
     M.Music.chime(1);
     const gamesMsg = h("p", { class: "muted small", "aria-live": "polite" });
@@ -1420,7 +1651,13 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     // Medium / High: leaving covers the timer with a warning until the student comes back
     const awayCover = h("div", { class: "focus-away", hidden: true, role: "alert" }, h("h2", {}, "You left the focus session"),
       h("p", {}, "This counts as leaving. Come back and keep going \u2014 the timer didn't stop."),
-      h("button", { class: "btn big", type: "button", onclick: () => { awayCover.hidden = true; if (!IN_APP && el.requestFullscreen && !document.fullscreenElement) el.requestFullscreen().catch(() => {}); } }, "I'm back"));
+      h("button", { class: "btn big", type: "button", onclick: () => backFromAway() }, "I'm back"));
+    function backFromAway() {
+      awayCover.hidden = true;
+      if (!IN_APP && el.requestFullscreen && !document.fullscreenElement) el.requestFullscreen().catch(() => {});
+    }
+    let awaySince = 0;
+    const cameBack = () => { if (awaySince) { tell("fback", { secs: Math.round((Date.now() - awaySince) / 1000), since: awaySince }); awaySince = 0; } };
     const phaseEl = h("p", { class: "focus-phase" }), timeEl = h("div", { class: "focus-time", role: "timer" }), fill = h("div", { class: "bar-fill focus-fill" });
     const dots = h("div", { class: "focus-dots", "aria-hidden": "true" });
     const info = h("p", { class: "muted focus-info", "aria-live": "polite" });
@@ -1445,27 +1682,42 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       const now = Date.now();
       if (st.phase === "focus" && st.pausesLeft > 0) {
         st.focused += (now - st.phaseStart) / 1000; st.remaining = st.ends - now; st.phase = "pause"; st.ends = now + cfg.pauseSecs * 1000; st.pausesLeft--; st.pausesUsed++;
+        st.pauseAt = now; tell("fpause", { max: cfg.pauseSecs });
       } else if (st.phase === "pause") resume(now);
       remember();
       paint();
     }
-    function resume(now) { st.phase = "focus"; st.ends = now + st.remaining; st.phaseStart = now; }
+    function resume(now, auto) {
+      if (st.pauseAt) tell("fresume", { secs: Math.round((now - st.pauseAt) / 1000), since: st.pauseAt, auto: !!auto });
+      st.pauseAt = 0; st.phase = "focus"; st.ends = now + st.remaining; st.phaseStart = now;
+    }
     function tick() {
       if (!Focus.active) return;
       const now = Date.now();
       if (now >= st.ends) {
-        if (st.phase === "pause") { resume(now); M.Music.chime(1); }
+        if (st.phase === "pause") { resume(now, true); M.Music.chime(1); }
         else if (st.phase === "focus") {
           st.focused += (st.ends - st.phaseStart) / 1000;
           if (st.round >= cfg.rounds) { finish(false); return; }
-          st.phase = "break"; st.ends = now + cfg.brk * 1000; M.Music.chime(2);
-        } else { st.round++; st.phase = "focus"; st.ends = now + cfg.focus * 1000; st.phaseStart = now; M.Music.chime(1); }
+          st.phase = "break"; st.ends = now + cfg.brk * 1000; M.Music.chime(2); tell("fround");
+        } else { st.round++; st.phase = "focus"; st.ends = now + cfg.focus * 1000; st.phaseStart = now; M.Music.chime(1); tell("fround"); }
         remember();
+      }
+      // 1 minute before a focus round ends (shown time): sound + popup
+      if (st.phase === "focus" && st.warned !== st.round && shownLeft() <= 60000 && cfg.focus > 60) {
+        st.warned = st.round; remember();
+        timeToast(st.round >= cfg.rounds ? "1 minute left \u2014 then the session is done!" : "1 minute left in this focus round, then a break.");
       }
       paint();
     }
+    // tricky timer: during focus the clock shows "shown" time, still reaching 0 when the real round ends
+    function shownLeft() {
+      const left = Math.max(0, st.ends - Date.now());
+      const rate = st.phase === "focus" && cfg.shown && cfg.shown !== cfg.focus ? cfg.shown / cfg.focus : 1;
+      return left * rate;
+    }
     function paint() {
-      const left = Math.max(0, st.ends - Date.now()), secs = Math.ceil(left / 1000);
+      const left = Math.max(0, st.ends - Date.now()), secs = Math.ceil(shownLeft() / 1000);
       const total = (st.phase === "focus" ? cfg.focus : st.phase === "break" ? cfg.brk : cfg.pauseSecs) * 1000;
       Focus.phase = st.phase;
       box.className = "card focus-card is-" + st.phase;
@@ -1488,7 +1740,9 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       if (!Focus.active) return;
       awayCover.hidden = true;
       if (early && st.phase === "focus") st.focused += (Date.now() - st.phaseStart) / 1000;
-      Focus.active = false; Focus.locked = false; Focus.onLeave = null; document.title = APP;
+      clearInterval(roomTry);
+      if (room) { tell("fend", { early: !!early, focused: Math.round(st.focused) }); const r0 = room; r0.flush(3000).then(() => r0.close()); room = null; }
+      Focus.active = false; Focus.locked = false; Focus.onLeave = null; Focus.onBack = null; document.title = APP;
       if (appLock) QDA.lock(false).catch(() => {});
       store.del("qd-focus-run");
       MusicBar.hide();
@@ -1509,11 +1763,18 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       h("div", { class: "bar" }, fill), dots, info, gamesMsg, h("div", { class: "row center" }, pauseBtn, skipBtn, fsBtn, endBtn), pinRow, awayCover);
     show(topbar([APP, statusChip(cfg.locked ? cfg.code : "Own session")], cfg.locked ? "Focus session \u00b7 teacher's rules" : "Focus session"), h("main", { class: "narrow focus-main" }, box));
     Focus.active = true; Focus.locked = !!cfg.locked; Focus.code = cfg.code || ""; Focus.end = () => finish(true);
+    // teacher panel (Down, Down, Up, Down)
+    Focus.checkPin = (v) => !cfg.locked || focusPinHash(v, cfg.body) === cfg.pinHash;
+    Focus.endByTeacher = () => finish(true);
+    Focus.resumeByTeacher = () => { if (st.phase === "pause") { resume(Date.now()); remember(); } backFromAway(); cameBack(); paint(); };
+    Object.defineProperty(Focus, "paused", { configurable: true, get: () => st.phase === "pause" || !awayCover.hidden });
     Focus.onLeave = () => {
       const now = Date.now();
       if (st.phase === "focus" && now - st.lastLeft > 3000) { st.lastLeft = now; st.left++; remember(); paint(); }
+      if (st.phase === "focus" && !awaySince) { awaySince = now; tell("faway"); }
       if (sec !== "low" && st.phase === "focus") awayCover.hidden = false;
     };
+    Focus.onBack = cameBack;
     if (resumed && Date.now() - st.lastLeft > 3000) { st.left++; st.lastLeft = Date.now(); }       // coming back after a reload counts as leaving the page
     remember();
     MusicBar.show(Array.isArray(cfg.music) ? cfg.music : M.Music.GROUPS.map(([g]) => g), true);
@@ -1522,8 +1783,12 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     Focus.repaint = paint;
   }
   document.addEventListener("fullscreenchange", () => { if (Focus.active && Focus.repaint) Focus.repaint(); });
-  document.addEventListener("visibilitychange", () => { if (Focus.active && document.visibilityState === "hidden" && Focus.onLeave) Focus.onLeave(); });
+  document.addEventListener("visibilitychange", () => {
+    if (!Focus.active) return;
+    if (document.visibilityState === "hidden") { if (Focus.onLeave) Focus.onLeave(); } else if (Focus.onBack && document.hasFocus()) Focus.onBack();
+  });
   window.addEventListener("blur", () => { if (Focus.active && Focus.onLeave) Focus.onLeave(); });
+  window.addEventListener("focus", () => { if (Focus.active && Focus.onBack) Focus.onBack(); });
 
   // ================================================================ teacher: write a quiz (any subject)
   const Q_TYPES = [["choice", "Multiple choice"], ["text", "Short answer (words)"], ["long", "Long answer (you grade it)"], ["yesno", "Yes / No"], ["math", "Math answer (number, interval, ...)"]];
@@ -1577,12 +1842,13 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
   function editor(set, note) {
     let idx = null, type = "choice";
     let opts = ["", "", "", ""], correct = 0, textVal = "", ynVal = "yes", mathVal = "", mathKind = "";
-    const tools = { spell: false, grammar: false, dict: false };
+    const tools = { spell: false, grammar: false, dict: false, thes: false };
     const toolBox = (k, label) => h("label", { class: "check" }, h("input", { type: "checkbox", "data-tool": k, onchange: (e) => { tools[k] = e.target.checked; } }), label);
     const toolsEl = h("div", { class: "tool-opts" }, h("p", { class: "label" }, "Help the student may use on this question"),
       toolBox("spell", "Spell check (misspelled words are underlined in written answers)"),
       toolBox("grammar", "Grammar check (a \u201cCheck my writing\u201d button on written answers)"),
-      toolBox("dict", "Dictionary (select a word to see its meaning and an example sentence)"));
+      toolBox("dict", "Dictionary (select a word to see its meaning and an example sentence)"),
+      toolBox("thes", "Thesaurus (select a word to see similar words; in their own answer they can swap one in)"));
     const paintTools = () => toolsEl.querySelectorAll("input").forEach((el) => { el.checked = !!tools[el.dataset.tool]; });
     const name = h("input", { class: "input", value: set.name, maxlength: 40, "aria-label": "Quiz name", oninput: (e) => { set.name = e.target.value.trim() || "Untitled quiz"; saveSets(); } });
     const list = h("ol", { class: "qlist" });
@@ -1665,7 +1931,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       const s = sol.value.trim();
       p.sol = s || (p.kind === "long" ? "" : `The correct answer is ${M.answerText(p)}.`);
       p.teacherSol = !!s;
-      if (tools.spell || tools.grammar || tools.dict) p.tools = Object.assign({}, tools);
+      if (tools.spell || tools.grammar || tools.dict || tools.thes) p.tools = Object.assign({}, tools);
       if (idx === null) { set.questions.push(p); idx = set.questions.length - 1; } else set.questions[idx] = p;
       saveSets(); refresh();
       msg.textContent = `Saved question ${idx + 1}` + (p.kind === "long" ? " (you'll grade it yourself)." : `. Correct answer: ${M.answerText(p)}`);
@@ -1759,7 +2025,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         if (ev.email && EMAIL_RE.test(ev.email)) s.email = String(ev.email).toLowerCase().slice(0, 80);
         log(ev.rejoin ? `${name} rejoined after reloading the page.` : ev.key ? `${name} came back with a key.` : `${name} joined${ev.app ? " (Quiz Duel app)" : ""}.`);
       }
-      else if (t === "start") { s.state = "working"; log(`${name} started the quiz.`); }
+      else if (t === "start") { s.state = "working"; if (!s.startedAt) s.startedAt = Date.now(); log(`${name} started the quiz.`); }
       else if (t === "ans") {
         const qn = ev.qn || ev.i;
         const p = full[qn - 1];
@@ -1784,6 +2050,8 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         if (!ev.soft) s.wants = false;
       } else if (t === "res") {
         if (ev.how === "dict") log(`${name} looked up the word "${ev.what}" (question ${ev.i}).`);
+        else if (ev.how === "thes") log(`${name} looked up similar words for "${ev.what}" (question ${ev.i}).`);
+        else if (ev.how === "timeup") log(`!! ${name}'s time ran out \u2014 the quiz was handed in by itself.`);
         else if (ev.how === "weak") log(`! On ${name}'s computer Windows didn't let Quiz Duel turn off: ${String(ev.what).slice(0, 200)}. Watch this student; leaving is still caught.`);
         else if (ev.how === "grammar") log(`${name} used the grammar check (question ${ev.i}).`);
         else if (ev.how === "back") log(`${name} came back to the quiz page.`);
@@ -1887,6 +2155,27 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       for (const s of Object.values(live.students)) {
         if (s.state === "working" && !s.silent && Date.now() - s.last > 20000) { s.silent = true; log(`!! ${s.name} DISCONNECTED in the middle of the quiz — closed it, or lost the internet (their answers are saved on their computer).`); }
       }
+      // time limit reminders for the teacher (10, 5, 3, 1 minutes left)
+      const L = live.limit;
+      if (L) {
+        live.limitFired = live.limitFired || {};
+        const label = (live.period ? live.period + " \u2014 " : "") + live.title;
+        if (L.mode === "all") {
+          const left = L.end - Date.now();
+          for (const m of [10, 5, 3, 1]) if (left <= m * 60000 && left > 0 && !live.limitFired["all" + m]) {
+            live.limitFired["all" + m] = 1; log(`\u23f1 ${m} minute${m > 1 ? "s" : ""} left for everyone.`); timeToast(`${label}: ${m} minute${m > 1 ? "s" : ""} left for everyone.`); r.dirty = true;
+          }
+          if (left <= 0 && !live.limitFired.allEnd) { live.limitFired.allEnd = 1; log("\u23f1 Time is up for everyone \u2014 quizzes are being handed in."); timeToast(`${label}: time is up.`); r.dirty = true; }
+        } else {
+          const hit = {};
+          for (const [sid, s] of Object.entries(live.students)) {
+            if (s.state !== "working" || !s.startedAt) continue;
+            const left = s.startedAt + L.min * 60000 - Date.now();
+            for (const m of [10, 5, 3, 1]) if (left <= m * 60000 && left > 0 && !live.limitFired[sid + m]) { live.limitFired[sid + m] = 1; (hit[m] = hit[m] || []).push(s.name); r.dirty = true; }
+          }
+          for (const m of Object.keys(hit)) { log(`\u23f1 ${m} minute${m > 1 ? "s" : ""} left: ${hit[m].join(", ")}.`); timeToast(`${label}: ${m} minute${m > 1 ? "s" : ""} left for ${hit[m].join(", ")}.`); }
+        }
+      }
       if (r.dirty) { Runners.save(); r.dirty = false; r.changed = true; }
     };
     r.host = new Host(live.code, live.token, live.payload, { event: apply, admit, status: (st) => { r.status = st; r.changed = true; } });
@@ -1915,6 +2204,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
   function dashboard(run) {
     const live = run.live, full = run.full;
     const statusEl = h("span", { class: "pill" }, "Connecting...");
+    const limitEl = h("p", { class: "big-num limit-left" });
     const tbody = h("tbody");
     const logEl = h("div", { class: "log mono" });
     const msg = h("span", { class: "muted" });
@@ -2017,6 +2307,9 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       paintLive();
     }
     function render(force) {
+      if (live.limit) limitEl.textContent = live.limit.mode === "all"
+        ? (live.limit.end > Date.now() ? `${clock((live.limit.end - Date.now()) / 1000)} left \u00b7 ends at ${fmtTime(live.limit.end)}` : "Time is up.")
+        : "Each student's time left is in the table.";
       const txt = { online: "Live — students can join", connecting: "Connecting...", reconnecting: "Reconnecting...", error: "Can't reach the connection service — check the internet." }[run.status] || run.status;
       statusEl.textContent = txt; statusEl.className = "pill " + (run.status === "online" ? "good" : run.status === "error" ? "bad" : "warn");
       const rows = Object.entries(live.students).sort((a, b) => (a[1].state === "redone") - (b[1].state === "redone") || a[1].name.toLowerCase().localeCompare(b[1].name.toLowerCase()));
@@ -2028,7 +2321,8 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
           h("td", { class: "num" }, s.right), h("td", { class: "num" }, s.half), h("td", { class: "num" }, s.wrong), h("td", { class: "num" }, s.skipped),
           h("td", { class: "num" + (s.togr ? " togr" : "") }, s.togr || 0),
           h("td", { class: "num strong" }, M.fmtPts(s.score)), h("td", { class: "num" }, s.left), h("td", { class: "num" }, s.monitor),
-          h("td", { class: "num" }, s.app ? "✓" : "–"), h("td", { class: "num muted" }, ago(s.last)));
+          h("td", { class: "num" }, s.app ? "✓" : "–"), h("td", { class: "num muted", title: ago(s.last) }, s.last ? fmtTime(s.last) : "–"),
+          live.limit && live.limit.mode !== "all" ? h("td", { class: "num" }, s.state === "working" && s.startedAt ? clock((s.startedAt + live.limit.min * 60000 - Date.now()) / 1000) : s.state === "done" ? "done" : "–") : null);
       }) : [h("tr", {}, h("td", { colspan: 14, class: "empty" }, "No students yet. Tell them to open this website, choose Student, and type the code."))]));
       const waiting = Object.values(live.answers).filter((a) => a.pts === null && !a.skipped && live.students[a.sid] && live.students[a.sid].state !== "redone").length;
       needEl.hidden = !waiting;
@@ -2036,7 +2330,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         h("button", { class: "btn small", onclick: () => { reviewMode = { pending: true }; drawReview(); review.scrollIntoView({ block: "nearest" }); } }, "Grade now"));
       if (force || run.changed || live.log.length !== logLen) {
         logLen = live.log.length; run.changed = false;
-        logEl.replaceChildren(...live.log.slice(-150).map(([t, x]) => h("div", { class: x.startsWith("!!") ? "bad" : x.startsWith("!") ? "warn" : "" }, new Date(t).toLocaleTimeString() + "  " + x)));
+        logEl.replaceChildren(...live.log.slice(-150).map(([t, x]) => h("div", { class: x.startsWith("!!") ? "bad" : x.startsWith("!") ? "warn" : "" }, fmtTime(t, true) + "  " + x)));
         logEl.scrollTop = logEl.scrollHeight;
         if (reviewMode && !review.contains(document.activeElement)) drawReview();
       }
@@ -2082,7 +2376,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
             h("p", { class: "p-ans" }, p.kind === "long" ? (p.sol ? "Model answer: " + p.sol : "") : "Correct answer: " + M.answerText(p)),
             h("p", { class: "p-pts" }, "Points: " + (a.pts === null ? "not graded yet" : M.fmtPts(a.pts))));
         }))) : [];
-      printOut("Results — " + nm, h("div", { class: "p-head" }, h("h1", {}, "Results — " + nm), h("p", {}, `Quiz code ${live.code} · ${live.total} questions · printed ${new Date().toLocaleString()}`)), table, pages);
+      printOut("Results — " + nm, h("div", { class: "p-head" }, h("h1", {}, "Results — " + nm), h("p", {}, `Quiz code ${live.code} · ${live.total} questions · printed ${fmtDateTime(Date.now())}`)), table, pages);
     }
     const resultsSel = h("select", { class: "input small", "aria-label": "Print", onchange: (e) => { const v = e.target.value; e.target.value = "";
       if (v === "table") printResults(false); else if (v === "all") printResults(true); else if (v) printQuiz(live.title, full, v === "key", live.period); } },
@@ -2108,6 +2402,8 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
           h("p", { class: "muted" }, `${live.total} questions. Students open this website → Student → type their name, email and the code.`)),
         card(h("p", { class: "label" }, "Unlock code — keep it secret"), h("div", { class: "pin mono" }, live.pin),
           h("p", { class: "muted" }, "Type it on a student's screen to unfreeze them or let them leave.")),
+        live.limit ? card(h("p", { class: "label" }, "Time limit: " + live.limit.min + " min" + (live.limit.mode === "all" ? " (same end for everyone)" : " (from each student's start)")), limitEl,
+          live.limit.shown !== live.limit.min ? h("p", { class: "muted small" }, `Tricky timer: students see ${live.limit.shown} minutes; it reaches 0 when the real ${live.limit.min} are up.`) : null) : null,
         card(h("p", { class: "label" }, "Security: " + SECURITY[level] + (live.closeGames ? " + Anti-game" : "")), h("p", { class: "muted" }, secText),
           live.closeGames ? h("p", { class: "muted" }, "Anti-game: students need the Quiz Duel app; it blocks game websites and closes games like Roblox.") : null,
           (level === "high" || live.closeGames) && (DOWNLOADS.win || DOWNLOADS.mac) ? h("p", { class: "small" }, "App download: ",
@@ -2115,7 +2411,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       needEl,
       h("section", { class: "card table-card" },
         h("div", { class: "table-wrap" }, h("table", { class: "dash" },
-          h("thead", {}, h("tr", {}, ["", "Student", "Status", "Q", "Right", "Half", "Wrong", "Skip", "To grade", "Score", "Left", "Monitor", "App", "Seen"].map((x) => h("th", {}, x)))), tbody)),
+          h("thead", {}, h("tr", {}, ["", "Student", "Status", "Q", "Right", "Half", "Wrong", "Skip", "To grade", "Score", "Left", "Monitor", "App", "Last seen"].concat(live.limit && live.limit.mode !== "all" ? ["Time left"] : []).map((x) => h("th", {}, x)))), tbody)),
         h("p", { class: "hint" }, "Click a student's name to read their answers, change points, or give them a continue or redo key."),
         h("div", { class: "row wrap" },
           h("button", { class: "btn small", onclick: () => act("unlock", "Sent unlock to") }, "Unlock"),
@@ -2217,6 +2513,66 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     else if (m.type === "lockdown-weak" && S.client && Array.isArray(m.data)) S.client.send("res", { how: "weak", what: m.data.join(", ") });
     else if (m.type === "apps-closed" && S.client && Array.isArray(m.data)) S.client.send("res", { how: "apps", what: m.data.join(", ") });
   });
+  // big reminder at the top of the screen, with a soft sound
+  function timeToast(text) {
+    let t = document.querySelector(".time-toast");
+    if (!t) { t = h("div", { class: "time-toast", role: "alert" }); document.body.append(t); }
+    t.textContent = text; t.classList.add("show");
+    try { M.Music.chime(2); } catch (e) { /* no sound */ }
+    clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove("show"), 7000);
+  }
+  // ---- languages: block letters from languages the teacher didn't allow (in written answers and text answers)
+  const quizWriting = () => (S.quiz && S.quiz.settings && S.quiz.settings.writing) || null;
+  function langNote(el) {
+    const W = quizWriting(); if (!W) return;
+    let n = document.querySelector(".lang-note");
+    if (!n) { n = h("div", { class: "lang-note", role: "status" }); document.body.append(n); }
+    const names = W.langs.map((x) => (LANG[x] || [x, x])[1]);
+    n.textContent = `Only ${LANG[Q.lang] ? LANG[Q.lang][1] : names[0]} here${W.nums ? " (and numbers/symbols)" : ""}.` + (W.langs.length > 1 ? " Use the language switch at the top to change." : " Your teacher chose the languages for this quiz.");
+    const r = el.getBoundingClientRect();
+    n.style.left = Math.max(8, Math.min(innerWidth - 340, r.left)) + "px"; n.style.top = Math.max(8, r.top - 44) + "px";
+    n.classList.add("show"); clearTimeout(n._t); n._t = setTimeout(() => n.classList.remove("show"), 2600);
+  }
+  const langTarget = (e) => e.target && e.target.closest && e.target.closest(".lang-checked");
+  document.addEventListener("beforeinput", (e) => {
+    const W = quizWriting(); if (!Q.active || !W || W.any) return;
+    const el = langTarget(e); if (!el || e.isComposing || e.inputType === "insertCompositionText") return;
+    const d = e.data || (e.dataTransfer && e.dataTransfer.getData("text")) || "";
+    if (d && [...d].some((ch) => !charOk(ch, W, Q.lang))) { e.preventDefault(); langNote(el); }
+  }, true);
+  // typing with an input method (Chinese, Japanese...) can't be stopped half-way, so it's cleaned up right after
+  document.addEventListener("input", (e) => {
+    const W = quizWriting(); if (!Q.active || !W || W.any || e.isComposing) return;
+    const el = langTarget(e); if (!el) return;
+    const bad = (t) => [...t].some((ch) => !charOk(ch, W, Q.lang));
+    const clean = (t) => [...t].filter((ch) => charOk(ch, W, Q.lang)).join("");
+    if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") { if (bad(el.value)) { el.value = clean(el.value); langNote(el); } return; }
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT); let n, changed = false;
+    while ((n = walker.nextNode())) if (bad(n.nodeValue)) { n.nodeValue = clean(n.nodeValue); changed = true; }
+    if (changed) { langNote(el); const sel = window.getSelection(); try { sel.selectAllChildren(el); sel.collapseToEnd(); } catch (er) {} }
+  }, true);
+  document.addEventListener("compositionend", (e) => { const el = langTarget(e); if (el) el.dispatchEvent(new Event("input", { bubbles: true })); }, true);
+  // the switch at the top of the quiz (only when the teacher allowed more than one language)
+  function langSwitch() {
+    const W = quizWriting(); if (!W || W.any || !W.langs || W.langs.length < 2) return null;
+    if (!W.langs.includes(Q.lang)) Q.lang = W.langs[0];
+    const wrap = h("div", { class: "lang-switch", role: "radiogroup", "aria-label": "Typing language" });
+    const paint = () => setKids(wrap, W.langs.map((id) => h("button", { type: "button", role: "radio", "aria-checked": Q.lang === id ? "true" : "false", class: "lang-btn" + (Q.lang === id ? " on" : ""),
+      title: "Type in " + (LANG[id] || [id, id])[1], onmousedown: (e) => e.preventDefault(),
+      onclick: () => { Q.lang = id; document.querySelectorAll(".lang-checked").forEach((el) => { el.lang = id; }); paint(); } }, (LANG[id] || [id, id, id])[2])));
+    paint();
+    return wrap;
+  }
+  // Ctrl+F / F3 during a quiz: never the browser's own search bar (it counts as leaving). Inside a writing box it opens
+  // that box's Find bar instead (handled by the box itself).
+  document.addEventListener("keydown", (e) => {
+    if (!Q.active) return;
+    const find = ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "F" || e.key === "g" || e.key === "G")) || e.key === "F3";
+    if (!find) return;
+    e.preventDefault();
+    const w = document.activeElement && document.activeElement.closest && document.activeElement.closest(".writer");
+    if (!w) { const any = document.querySelector(".writer .long-answer, .writer [contenteditable=true]"); if (any && (e.ctrlKey || e.metaKey) && /f/i.test(e.key)) { any.focus(); any.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true })); } }
+  }, true);
   // no ads while a quiz, preview or focus session is on screen
   setInterval(() => { document.body.classList.toggle("no-ads", !!(Q.active || (typeof Focus !== "undefined" && Focus.active))); }, 500);
   // during a quiz or focus session, links that would leave the page (like the "Powered by Netlify" badge) do nothing
@@ -2283,10 +2639,11 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     } }, "Check my writing");
     return h("div", { class: "gram" }, btn, list);
   }
-  // Dictionary: select one word in the question or in your answer to see what it means.
+  // Dictionary + thesaurus: select one word in the question or in your answer to see what it means
+  // and/or similar words (each one the teacher allowed on this question).
   const Dict = {
-    on: false, chip: null, pop: null, cache: {},
-    enable(yes) { this.on = !!yes; this.clear(); document.body.classList.toggle("dict-on", this.on); },
+    on: false, dict: false, thes: false, chip: null, pop: null, cache: {}, syn: {},
+    enable(dict, thes) { this.dict = !!dict; this.thes = !!thes; this.on = this.dict || this.thes; this.clear(); document.body.classList.toggle("dict-on", this.on); },
     clear() { if (this.chip) { this.chip.remove(); this.chip = null; } if (this.pop) { this.pop.remove(); this.pop = null; } },
     selected(e) {
       const el = e.target;
@@ -2294,14 +2651,23 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA") && typeof el.selectionStart === "number") { text = el.value.slice(el.selectionStart, el.selectionEnd); rect = el.getBoundingClientRect(); }
       else { const sel = window.getSelection(); if (sel && sel.rangeCount && !sel.isCollapsed) { text = sel.toString(); rect = sel.getRangeAt(0).getBoundingClientRect(); } }
       const word = text.trim().replace(/^[^A-Za-z]+|[^A-Za-z]+$/g, "");
-      return /^[A-Za-z][A-Za-z'\u2019-]{1,29}$/.test(word) ? { word: word.toLowerCase().replace(/\u2019/g, "'"), rect } : null;
+      if (!/^[A-Za-z][A-Za-z'\u2019-]{1,29}$/.test(word)) return null;
+      // remember where the word is, so a similar word can be swapped in (only inside the student's own answer)
+      let swap = null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA") && !el.readOnly && !el.disabled) swap = { input: el, start: el.selectionStart, end: el.selectionEnd };
+      else { const sel = window.getSelection(); const ed = sel.anchorNode && sel.anchorNode.parentElement && sel.anchorNode.parentElement.closest("[contenteditable=true]");
+        if (ed && sel.rangeCount) swap = { range: sel.getRangeAt(0).cloneRange(), editor: ed }; }
+      return { word: word.toLowerCase().replace(/\u2019/g, "'"), shown: word, rect, swap };
     },
     onSelect(e) {
       if (!this.on || !Q.active || (e.target && e.target.closest && e.target.closest(".dict-chip, .dict-pop, .ref-panel, .music-bar, .topbar"))) return;
       const got = this.selected(e);
       if (this.chip) { this.chip.remove(); this.chip = null; }
       if (!got) return;
-      this.chip = h("button", { class: "dict-chip", type: "button", onmousedown: (ev) => ev.preventDefault(), onclick: () => this.lookup(got.word, got.rect) }, `Meaning of \u201c${got.word}\u201d`);
+      const nd = (ev) => ev.preventDefault();
+      this.chip = h("div", { class: "dict-chip-row" },
+        this.dict ? h("button", { class: "dict-chip", type: "button", onmousedown: nd, onclick: () => this.lookup(got.word, got.rect) }, `Meaning of \u201c${got.word}\u201d`) : null,
+        this.thes ? h("button", { class: "dict-chip", type: "button", onmousedown: nd, onclick: () => this.similar(got) }, "Similar words") : null);
       this.place(this.chip, got.rect);
     },
     place(el, rect) {
@@ -2341,9 +2707,81 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       this.place(this.pop, rect);
     },
   };
+  // thesaurus: similar words from the free Datamuse service, plus the dictionary's own list
+  Dict.similar = async function (got) {
+    const word = got.word;
+    this.clear();
+    const body = h("div", {}, h("p", { class: "muted" }, "Finding similar words..."));
+    this.pop = h("div", { class: "dict-pop", role: "dialog", "aria-label": `Words similar to ${word}` },
+      h("div", { class: "dict-head" }, h("b", { class: "dict-word" }, "Similar to \u201c" + word + "\u201d"), h("button", { class: "btn small ghost", type: "button", onclick: () => this.clear() }, "Close")), body);
+    this.place(this.pop, got.rect);
+    if (S.client) S.client.send("res", { how: "thes", what: word });
+    let list = this.syn[word];
+    if (!list) {
+      list = [];
+      try { const r = await fetch("https://api.datamuse.com/words?max=16&rel_syn=" + encodeURIComponent(word)); if (r.ok) list = (await r.json()).map((x) => x.word); } catch (e) { list = null; }
+      try {
+        const d = this.cache[word] !== undefined ? this.cache[word] : await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(word)).then((r) => r.ok ? r.json() : null, () => null);
+        if (Array.isArray(d)) for (const en of d) for (const m of en.meanings || []) for (const x of m.synonyms || []) if (list && !list.includes(x)) list.push(x);
+      } catch (e) { /* ignore */ }
+      if (list) this.syn[word] = list;
+    }
+    if (!this.pop) return;
+    if (list === null) { setKids(body, h("p", { class: "bad" }, "The thesaurus can't be reached right now.")); return; }
+    const words = list.filter((x) => /^[a-z][a-z' -]{0,30}$/i.test(x)).slice(0, 16);
+    if (!words.length) { setKids(body, h("p", {}, "No similar words found. Check the spelling, or try the basic form of the word.")); return; }
+    const canSwap = !!got.swap;
+    const fit = (x) => got.shown[0] === got.shown[0].toUpperCase() ? x[0].toUpperCase() + x.slice(1) : x;
+    setKids(body, h("div", { class: "syn-list" }, words.map((x) => canSwap
+      ? h("button", { class: "syn", type: "button", title: "Use this word instead", onmousedown: (ev) => ev.preventDefault(), onclick: () => { swapWord(got.swap, fit(x)); this.clear(); } }, x)
+      : h("span", { class: "syn" }, x))),
+      canSwap ? h("p", { class: "muted small" }, "Click a word to put it in place of \u201c" + got.shown + "\u201d.") : null);
+    this.place(this.pop, got.rect);
+  };
+  function swapWord(sw, word) {
+    try {
+      if (sw.input) {
+        const el = sw.input; el.focus(); el.setSelectionRange(sw.start, sw.end);
+        if (!document.execCommand("insertText", false, word)) { el.setRangeText(word, sw.start, sw.end, "end"); el.dispatchEvent(new Event("input", { bubbles: true })); }
+      } else if (sw.range && sw.editor) {
+        sw.editor.focus(); const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(sw.range);
+        document.execCommand("insertText", false, word);
+      }
+    } catch (e) { /* ignore */ }
+  }
   for (const evName of ["mouseup", "keyup", "dblclick"]) document.addEventListener(evName, (e) => { if (Dict.on) setTimeout(() => Dict.onSelect(e), 0); });
 
   // ---- reference pages the teacher allowed: shown inside the quiz, held to those websites only
+  // drag a panel by its top bar (it becomes a floating window you can also resize from the corner);
+  // double-click the bar to put it back on the right side. The position is remembered.
+  function makeDraggable(el, handle, key) {
+    const place = (p) => {
+      if (!p) { el.classList.remove("floating"); el.style.left = el.style.top = el.style.width = el.style.height = ""; return; }
+      el.classList.add("floating");
+      const w = Math.min(p.w || 640, innerWidth - 20), hgt = Math.min(p.h || 520, innerHeight - 20);
+      el.style.width = w + "px"; el.style.height = hgt + "px";
+      el.style.left = Math.max(0, Math.min(p.x, innerWidth - 80)) + "px"; el.style.top = Math.max(0, Math.min(p.y, innerHeight - 40)) + "px";
+    };
+    place(store.get(key));
+    handle.style.cursor = "move";
+    handle.title = "Drag to move \u00b7 double-click to put it back on the side";
+    handle.addEventListener("dblclick", (e) => { if (e.target.closest("button")) return; store.set(key, null); place(null); });
+    handle.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || e.target.closest("button, a, input, select")) return;
+      e.preventDefault();
+      const r = el.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top;
+      if (!el.classList.contains("floating")) place({ x: r.left, y: r.top, w: Math.min(r.width, 640), h: Math.min(r.height, 560) });
+      el.classList.add("dragging");                       // iframes don't steal the mouse while moving
+      const move = (ev) => { el.style.left = Math.max(0, Math.min(ev.clientX - dx, innerWidth - 80)) + "px"; el.style.top = Math.max(0, Math.min(ev.clientY - dy, innerHeight - 40)) + "px"; };
+      const up = () => {
+        el.classList.remove("dragging"); removeEventListener("pointermove", move); removeEventListener("pointerup", up);
+        const b = el.getBoundingClientRect(); store.set(key, { x: b.left, y: b.top, w: b.width, h: b.height });
+      };
+      addEventListener("pointermove", move); addEventListener("pointerup", up);
+    });
+    // remember the size after a resize from the corner
+    try { new ResizeObserver(() => { if (el.classList.contains("floating") && !el.classList.contains("dragging") && el.isConnected) { const b = el.getBoundingClientRect(); store.set(key, { x: b.left, y: b.top, w: b.width, h: b.height }); } }).observe(el); } catch (e) {}
+  }
   const Refs = {
     list: [], notes: "", el: null, win: null, poll: null, back: 0, framed: true, cspHosts: null,
     parse(text) {
@@ -2400,6 +2838,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         h("div", { class: "ref-head" }, h("div", { class: "ref-tabs", role: "tablist" }, tabEls), h("button", { class: "btn small ghost", type: "button", onclick: () => this.close() }, "Close")),
         body, foot);
       document.body.append(this.el);
+      makeDraggable(this.el, this.el.querySelector(".ref-head"), "qd-ref-pos");
       pick(Math.min(idx || 0, tabs.length - 1));
     },
     // fallback for websites that refuse to be shown inside another page
@@ -2473,9 +2912,44 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     const now = Date.now();
     arrows = arrows.filter((a) => now - a.t < 4000).concat({ k: e.key, t: now }).slice(-4);
     const seq = arrows.map((a) => a.k).join();
-    if (seq === "ArrowUp,ArrowUp,ArrowDown,ArrowUp" || seq === "ArrowDown,ArrowDown,ArrowUp,ArrowDown") { arrows = []; e.preventDefault(); helpPanel(); }
+    if (seq === "ArrowUp,ArrowUp,ArrowDown,ArrowUp") { arrows = []; e.preventDefault(); helpPanel(); }
+    else if (seq === "ArrowDown,ArrowDown,ArrowUp,ArrowDown") { arrows = []; e.preventDefault(); teacherPanel(); }
   }, true);
   // Always works for a student: shows the code for 5 seconds, then closes whatever they are in.
+  // Down, Down, Up, Down: the teacher's panel on a student's screen. The teacher types the code to let the
+  // student back in (unlock) or to let them leave. Nothing secret is shown.
+  function teacherPanel() {
+    if ($("#teacher-panel") || $("#help-panel")) return;
+    const inFocus = Focus.active, inQuiz = Q.active && S.client && !Q.finished;
+    if (!inFocus && !inQuiz) { helpPanel(); return; }
+    const close = () => { box.remove(); if (Q.dom && Q.dom.focus && !Q.overlay) Q.dom.focus(); };
+    const pin = h("input", { class: "input pin-in", type: "password", inputmode: "numeric", maxlength: 6, autocomplete: "off", "aria-label": "teacher code" });
+    const msg = h("p", { class: "ov-msg", "aria-live": "polite" });
+    const good = () => {
+      const v = pin.value.trim();
+      if (inFocus) return Focus.checkPin ? Focus.checkPin(v) : false;
+      return !!(Q.st.unlock && unlockHash(S.client.code, v) === Q.st.unlock);
+    };
+    const act = (leave) => {
+      if (!good()) { msg.textContent = inFocus ? "That's not the end code." : "That's not the unlock code."; pin.value = ""; pin.focus(); return; }
+      box.remove();
+      if (inFocus) { if (leave) Focus.endByTeacher(); else Focus.resumeByTeacher(); return; }
+      if (leave) Q.leaveNow("unlock code");
+      else if (Q.overlay && Q.overlay.why !== "unlocked") Q.unlocked("unlock code");
+    };
+    const frozen = inQuiz ? !!(Q.overlay && Q.overlay.why !== "unlocked") : !!Focus.paused;
+    const box = h("div", { id: "teacher-panel", class: "overlay navy", role: "dialog", "aria-modal": "true", "aria-label": "Teacher panel" },
+      h("div", { class: "ov-box" },
+        h("h2", {}, "Teacher panel"),
+        h("p", {}, inFocus ? "Teacher: type the end code for this focus session." : "Teacher: type this quiz's unlock code (it's on your dashboard)."),
+        h("form", { onsubmit: (e) => { e.preventDefault(); act(!frozen); } }, pin, msg,
+          h("div", { class: "row center" },
+            frozen || inFocus ? h("button", { class: "btn light", type: "button", onclick: () => act(false) }, inFocus ? "Back to focusing" : "Unlock \u2014 back to the quiz") : null,
+            h("button", { class: "btn light", type: "button", onclick: () => act(true) }, inFocus ? "End the session" : "Let them leave"),
+            h("button", { class: "btn ghost-light", type: "button", onclick: close }, "Close")))));
+    document.body.append(box);
+    pin.focus();
+  }
   function helpPanel() {
     if ($("#help-panel")) return;
     if (Runners.list.length || (S.teacherOk && !Q.active && !Focus.active)) return;       // not on the teacher's own screens
@@ -2518,7 +2992,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
   const Q = {
     active: false, overlay: null,
     reset() {
-      Object.assign(this, { i: 0, you: 0, them: 0, youRounds: 0, themRounds: 0, results: [], violations: [], drafts: {}, prev: {}, started: Date.now(), overlay: null, finished: null, dom: null });
+      Object.assign(this, { i: 0, you: 0, them: 0, youRounds: 0, themRounds: 0, results: [], violations: [], drafts: {}, prev: {}, started: Date.now(), overlay: null, finished: null, dom: null, limitFired: [], timeIsUp: false, formItems: null });
     },
     setup() {
       this.st = S.quiz.settings; this.problems = S.quiz.problems; this.total = this.problems.length;
@@ -2527,17 +3001,69 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     save() {
       if (!S.client || this.finished) return;
       store.set("md-student", { state: "quiz", code: S.client.code, name: S.client.name, email: S.client.email, sid: S.client.sid, i: this.i, them: this.them,
-        youRounds: this.youRounds, themRounds: this.themRounds, started: this.started, violations: this.violations, results: this.results, drafts: this.drafts, prev: this.prev });
+        youRounds: this.youRounds, themRounds: this.themRounds, started: this.started, violations: this.violations, results: this.results, drafts: this.drafts, prev: this.prev, limitFired: this.limitFired || [] });
     },
     restore(saved) {
       this.reset();
       this.setup();
       Object.assign(this, { i: saved.i || 0, them: saved.them || 0, youRounds: saved.youRounds || 0, themRounds: saved.themRounds || 0,
-        started: saved.started || Date.now(), violations: saved.violations || [], drafts: saved.drafts || {}, prev: saved.prev || {} });
+        started: saved.started || Date.now(), violations: saved.violations || [], drafts: saved.drafts || {}, prev: saved.prev || {}, limitFired: saved.limitFired || [] });
       this.results = saved.results || [];
       this.rescore();
       // answers that hadn't been checked yet get sent again (same id, so they're never counted twice)
       this.results.forEach((r, k) => { if (r && r.pts === null && !r.waiting && r.eid) S.client.send("ans", { qn: k + 1, i: k + 1, raw: r.skipped ? "" : r.raw, skipped: r.skipped, secs: r.secs }, r.eid); });
+    },
+    // ---- time limit: real end time, and the time the student is shown (the tricky timer can run it faster or slower)
+    limitEnd() {
+      const L = this.st && this.st.limit; if (!L) return 0;
+      return L.mode === "all" ? L.end : (this.started || Date.now()) + L.min * 60000;
+    },
+    shownLeft() { const L = this.st.limit, real = this.limitEnd() - Date.now(); return Math.max(0, real * ((L.shown || L.min) / L.min)); },
+    startClock() {
+      clearInterval(this.limitTimer); this.limitTimer = null;
+      if (!this.st || !this.st.limit) return;
+      this.limitFired = this.limitFired || [];
+      this.limitTick();
+      this.limitTimer = setInterval(() => this.limitTick(), 500);
+    },
+    limitTick() {
+      if (!this.active || this.finished) { clearInterval(this.limitTimer); return; }
+      const left = this.shownLeft();
+      const el = document.querySelector(".limit-chip");
+      if (el) { el.textContent = "\u23f1 " + clock(Math.ceil(left / 1000)) + " left"; el.classList.toggle("low", left <= 5 * 60000); }
+      const due = [10, 5, 3, 1].filter((m) => left <= m * 60000 && left > 0 && !this.limitFired.includes(m));
+      if (due.length) {
+        due.forEach((m) => this.limitFired.push(m));
+        const m = Math.min(...due);
+        timeToast(m === 1 ? "1 minute left! Your quiz hands itself in when the clock reaches 0." : `${m} minutes left.`);
+        this.save();
+      }
+      if (this.limitEnd() - Date.now() <= 0) this.timeUp();
+    },
+    limitChip() { return this.st && this.st.limit ? h("span", { class: "limit-chip", role: "timer", "aria-live": "off" }, "\u23f1") : null; },
+    // time is up: hand in what's on screen (if it can be read), then finish
+    timeUp() {
+      if (!this.active || this.finished || this.timeIsUp) return;
+      this.timeIsUp = true; clearInterval(this.limitTimer);
+      try {
+        if (this.formItems && document.querySelector(".form-page")) {
+          for (const it of this.formItems) {
+            if (this.results[it.k]) continue;
+            const raw = it.getRaw(), ok = !!raw && M.readable(it.p, raw);
+            const entry = { raw: ok ? raw : "", skipped: !ok, secs: 0, pts: null, waiting: false, race: false, rt: 0, rpts: 0, counted: false };
+            this.results[it.k] = entry; delete this.drafts[it.k];
+            if (S.client) entry.eid = S.client.send("ans", { qn: it.k + 1, i: it.k + 1, raw: entry.raw, skipped: entry.skipped, secs: 0 });
+            else { const pts = entry.skipped ? 0 : M.grade(it.p, entry.raw); this.onGraded(it.k, { pts, waiting: pts === null, ans: M.answerText(it.p), sol: it.p.sol }); }
+          }
+        } else if (this.dom && !this.answered) {
+          const raw = this.dom.getRaw();
+          if (raw && M.readable(this.prob, raw)) this.submit(false);
+        }
+      } catch (e) { /* hand in anyway */ }
+      if (S.client) S.client.send("res", { how: "timeup" });
+      this.save();
+      timeToast("Time's up! Your quiz was handed in.");
+      setTimeout(() => this.finish(false), 400);
     },
     resume() {
       // reloading the page during a quiz counts as leaving it
@@ -2551,6 +3077,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       this.next();
       if (Lock.on && !allDone && !this.continued) this.violation(IN_APP && QDA && QDA.relaunched ? "closed" : "reload");
       this.continued = false;
+      this.startClock();
     },
     hookClient() {
       if (!S.client) return;
@@ -2672,7 +3199,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     // a short rest between questions (the teacher sets how often and how long)
     breakTime(then) {
       let left = Math.max(5, +this.st.breakSecs || 60), over = false;
-      const fmt = (n) => `${Math.floor(n / 60)}:${String(n % 60).padStart(2, "0")}`;
+      const fmt = (n) => clock(n);
       const num = h("div", { class: "cd-num brk" }, fmt(left));
       const end = () => { if (over) return; over = true; then(); };
       show(this.header(), h("main", { class: "quiz" }, h("section", { class: "card cd" },
@@ -2704,7 +3231,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
       }
       const pv = S.preview ? [h("span", { class: "pill warn", title: "Nothing you do here is recorded or sent." + (S.preview.security !== "low" || S.preview.games ? " The lock (" + [S.preview.security !== "low" ? SECURITY[S.preview.security] + " security" : "", S.preview.games ? "anti-game" : ""].filter(Boolean).join(" + ") + ") is off in preview." : "") }, "Preview — nothing is recorded"),
         h("button", { class: "btn tiny-btn", onclick: () => exitPreview() }, "Exit preview")] : null;
-      return topbar(left, [net, this.scoreEl], [pv, leaveBtn, Refs.button()]);
+      return topbar(left, [this.limitChip(), langSwitch(), net, this.scoreEl], [pv, leaveBtn, Refs.button()]);
     },
     paintScore() {
       if (!this.scoreEl) return;
@@ -2745,7 +3272,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
           input = h("div", { class: "answer-col" }, w.box, studentTools(p, () => w.page.innerText)); getRaw = () => w.isEmpty() ? "" : w.html();
           keepDraft(k, getRaw, (d) => { w.page.replaceChildren(richClean(d)); });
         } else {
-          input = h("input", { id: "answer" + (k + 1), class: "input answer" + (p.kind === "text" ? "" : " mono"), autocomplete: "off", autocorrect: "off", autocapitalize: "off", spellcheck: p.kind === "text" && p.tools && p.tools.spell ? "true" : "false", lang: "en", "aria-label": `Your answer to question ${k + 1}`,
+          input = h("input", { id: "answer" + (k + 1), class: "input answer" + (p.kind === "text" ? " lang-checked" : " mono"), autocomplete: "off", autocorrect: "off", autocapitalize: "off", spellcheck: p.kind === "text" && p.tools && p.tools.spell ? "true" : "false", lang: "en", "aria-label": `Your answer to question ${k + 1}`,
             onkeydown: (e) => { if (e.key === "Enter") e.preventDefault(); } });
           const field = input, extra = studentTools(p, () => field.value);
           getRaw = () => field.value.trim();
@@ -2760,7 +3287,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
           p.graph ? graphSvg(p.graph) : null);
         items.push({ k, p, box, howto, getRaw });
       }
-      Dict.enable(items.some((it) => it.p.tools && it.p.tools.dict));
+      Dict.enable(items.some((it) => it.p.tools && it.p.tools.dict), items.some((it) => it.p.tools && it.p.tools.thes));
       const msg = h("p", { class: "msg", "aria-live": "polite" });
       let warned = "";
       const t0 = Date.now();
@@ -2793,6 +3320,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         this.save();
         this.formPage();
       };
+      this.formItems = items;
       show(this.header(), h("main", { class: "quiz form-page" }, items.map((it) => it.box),
         h("section", { class: "card form-foot" }, msg,
           h("div", { class: "row" }, h("button", { class: "btn big good", type: "button", onclick: handIn }, last ? "Hand in the quiz \u203a" : "Next page \u203a"),
@@ -2824,7 +3352,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         focus = () => w.page.focus();
         keepDraft(this.i - 1, () => w.isEmpty() ? "" : w.html(), (d) => { w.page.replaceChildren(richClean(d)); });
       } else {
-        const answer = h("input", { id: "answer", class: "input answer" + (p.kind === "text" ? "" : " mono"), autocomplete: "off", autocorrect: "off", autocapitalize: "off", spellcheck: p.kind === "text" && p.tools && p.tools.spell ? "true" : "false", lang: "en", "aria-label": "Your answer" });
+        const answer = h("input", { id: "answer", class: "input answer" + (p.kind === "text" ? " lang-checked" : " mono"), autocomplete: "off", autocorrect: "off", autocapitalize: "off", spellcheck: p.kind === "text" && p.tools && p.tools.spell ? "true" : "false", lang: "en", "aria-label": "Your answer" });
         const extra = studentTools(p, () => answer.value);
         form = h("form", { class: "answer-row", onsubmit: (e) => { e.preventDefault(); this.submit(false); } }, answer, submitBtn, skipBtn, extra);
         getRaw = () => answer.value.trim();
@@ -2853,7 +3381,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
         p.graph ? graphSvg(p.graph) : null)));
       this.answered = false;
       this.t0 = Date.now();
-      Dict.enable(p.tools && p.tools.dict);
+      Dict.enable(p.tools && p.tools.dict, p.tools && p.tools.thes);
       focus();
       every(100, () => this.tick());
     },
@@ -2982,6 +3510,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     async finish(early) {
       if (this.finished) return;
       this.active = false;
+      clearInterval(this.limitTimer);
       stopDrafts();
       MusicBar.hide();
       Refs.end();
@@ -3097,6 +3626,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
     MusicBar.show(Q.st.music || []);
     Refs.setup(Q.st);
     Q.next();
+    Q.startClock();
   }
 
   // graph for the two picture problems
@@ -3125,7 +3655,7 @@ Reply with ONLY one JSON object in exactly this shape, and nothing before or aft
   }
 
   // test hooks (used only by the automated browser test)
-  window.__md = { writer, richClean, aiPrompt, aiParse, aiQuestions, focusRun, focusCode, focusParse, S, Q, Lock, home, Runners, setDisplays: (n) => { appDisplays = n; } };
+  window.__md = { writer, richClean, timeToast, focusRoomCode, aiPrompt, aiParse, aiQuestions, focusRun, focusCode, focusParse, S, Q, Lock, home, Runners, setDisplays: (n) => { appDisplays = n; } };
   const savedFocus = store.get("qd-focus-run");
   if (savedFocus && savedFocus.cfg && savedFocus.cfg.locked && savedFocus.st && Date.now() < savedFocus.st.ends + 10 * 60000) focusRun(savedFocus.cfg, savedFocus.st);
   else if (QS.get("focus")) { store.del("qd-focus-run"); focusSetup(QS.get("focus")); }

@@ -12,7 +12,7 @@ try { Object.assign(CONFIG, JSON.parse(fs.readFileSync(path.join(__dirname, "con
 if (process.env.QUIZDUEL_SITE) CONFIG.siteUrl = process.env.QUIZDUEL_SITE;          // for testing
 const SITE = new URL(CONFIG.siteUrl);
 // Everything the quiz page needs. Nothing else can load in the app.
-const BASE_ALLOWED = new Set([SITE.origin, "wss://broker.hivemq.com:8884", "wss://broker.emqx.io:8084", "https://api.dictionaryapi.dev"]);
+const BASE_ALLOWED = new Set([SITE.origin, "wss://broker.hivemq.com:8884", "wss://broker.emqx.io:8084", "https://api.dictionaryapi.dev", "https://api.datamuse.com"]);
 if (process.env.QUIZDUEL_EXTRA_ORIGINS) process.env.QUIZDUEL_EXTRA_ORIGINS.split(",").forEach((o) => BASE_ALLOWED.add(o.trim()));
 let refOrigins = new Set();
 const PROTOCOL = "quizduel";
@@ -87,7 +87,7 @@ function createWindow(startUrl) {
     // during a locked quiz: no copy, cut or paste at all (the page also blocks it)
     if (locked && ((mod && ["c", "x", "v", "insert"].includes(k)) || (input.shift && (k === "insert" || k === "delete")))) { e.preventDefault(); return; }
     if (k === "f5" || k === "f12" || k === "f11" || k === "f1" ||
-        (mod && !input.shift && ["r", "w", "n", "t", "p", "s", "o", "q", "h", "m", "j", "l", "d", "f", "g"].includes(k)) || (mod && input.shift && ["n", "t", "w", "q"].includes(k)) ||
+        (mod && !input.shift && ["r", "w", "n", "t", "p", "s", "o", "q", "h", "m", "j", "l", "d"].includes(k)) || (mod && input.shift && ["n", "t", "w", "q"].includes(k)) ||
         (mod && input.shift && ["i", "c", "j", "delete"].includes(k)) || (input.alt && k === "f4") || (input.alt && (k === "arrowleft" || k === "arrowright"))) e.preventDefault();
   });
   // spelling suggestions (the page decides which boxes have spell check)
@@ -111,7 +111,8 @@ function createWindow(startUrl) {
   win.loadFile(path.join(__dirname, "loading.html")).catch(() => {}).then(() => loadSite(startUrl));
 }
 // ---------------------------------------------------------------- always a way out (when no locked quiz is running)
-// Up, Up, Down, Up  or  Down, Down, Up, Down  (within 4 seconds), or Ctrl+Shift+Alt+Q, close Quiz Duel from ANY screen -
+// Up, Up, Down, Up (within 4 seconds) or Ctrl+Shift+Alt+Q close Quiz Duel from ANY screen; Down, Down, Up, Down does too,
+// except on the working site, where it opens the teacher panel -
 // the starting screen, an error page, or a page that froze. During a locked quiz the page handles it (teacher's code).
 let keyTrail = [];
 function emergencyKey(k) {
@@ -119,7 +120,17 @@ function emergencyKey(k) {
   const now = Date.now();
   keyTrail = keyTrail.filter((x) => now - x.t < 4000).concat({ k, t: now }).slice(-4);
   const seq = keyTrail.map((x) => x.k).join(",");
-  if (!locked && (seq === "arrowup,arrowup,arrowdown,arrowup" || seq === "arrowdown,arrowdown,arrowup,arrowdown")) quitNow();
+  if (locked) return;
+  if (seq === "arrowup,arrowup,arrowdown,arrowup") quitNow();
+  else if (seq === "arrowdown,arrowdown,arrowup,arrowdown") {
+    // On the working Quiz Duel site, Down, Down, Up, Down opens the teacher panel (the page handles it).
+    // Anywhere else (starting screen, error page, a stuck or blank page) it still closes the app.
+    keyTrail = [];
+    let answered = false;
+    const t = setTimeout(() => { if (!answered) quitNow(); }, 1200);
+    win.webContents.executeJavaScript("!!(window.__md && document.body && document.body.innerText.trim())", true)
+      .then((ok) => { answered = true; clearTimeout(t); if (!ok) quitNow(); }, () => { answered = true; clearTimeout(t); quitNow(); });
+  }
 }
 function quitNow() { quitting = true; try { setLocked(false); } catch (e) {} winlock.shutdown(); app.quit(); setTimeout(() => app.exit(0), 3000); }
 
